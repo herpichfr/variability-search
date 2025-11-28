@@ -2,6 +2,8 @@
 
 import argparse
 
+from variability_search import __version__
+
 
 def main():
     """Main entry point for the variability-search CLI."""
@@ -11,7 +13,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "catalog",
