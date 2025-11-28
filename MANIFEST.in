@@ -1,0 +1,15 @@
+# Include the license and readme
+include LICENSE
+include README.md
+
+# Include data directory structure
+graft data
+
+# Include tests
+graft tests
+
+# Exclude compiled files
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store
