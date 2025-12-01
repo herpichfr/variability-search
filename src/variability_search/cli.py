@@ -16,9 +16,19 @@ def main():
         version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
-        "catalog",
+        "inputdir",
         nargs="?",
-        help="Path to input catalog file (CSV, ASCII, or FITS)",
+        help="Path to input list of catalogues file (CSV, ASCII, or FITS)",
+    )
+    parser.add_argument(
+        "--workdir",
+        Default=None,
+        help="Path to working directory. Default is inputdir if not specified.",
+    )
+    parser.add_argument(
+        "--outputdir",
+        Default="output",
+        help="Path to output directory. Default is 'output'.",
     )
     parser.add_argument(
         "-o",
