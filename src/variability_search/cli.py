@@ -31,6 +31,11 @@ def main():
         help="Path to output directory. Default is 'output'.",
     )
     parser.add_argument(
+        "--raunit",
+        default="deg",
+        help="Unit for Right Ascension (default: deg)",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         help="Path to output file",
