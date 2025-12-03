@@ -1,6 +1,7 @@
 #!/bin/python3
 
 import os
+import argparse
 from astropy.io import fits, ascii
 from astropy.coordinates import SkyCoord
 from astropy import units as u
@@ -9,6 +10,70 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 from multiprocessing import Pool
+from src.variability_search import __version__
+
+
+def parse_args():
+    """Main entry point for the variability-search CLI."""
+    parser = argparse.ArgumentParser(
+        description="Search for variability in astronomical observations"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
+        "inputdir",
+        nargs="?",
+        help="Path to input list of catalogues file (CSV, ASCII, or FITS)",
+    )
+    parser.add_argument(
+        "--workdir",
+        default=None,
+        help="Path to working directory. Default is inputdir if not specified.",
+    )
+    parser.add_argument(
+        "--outputdir",
+        default="output",
+        help="Path to output directory. Default is 'output'.",
+    )
+    parser.add_argument(
+        "--raunit",
+        default="deg",
+        help="Unit for Right Ascension (default: deg)",
+    )
+    parser.add_argument(
+        "--np",
+        type=int,
+        default=1,
+        help="Number of processes to use for parallel processing (default: 1)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Path to output file",
+    )
+    parser.add_argument(
+        "-l",
+        "--logfile",
+        help="Path to log file",
+    )
+    parser.add_argument(
+        "--loglevel",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode",
+    )
+
+    args = parser.parse_args()
+
+    return args
 
 
 def logger(logfile=None, loglevel=logging.INFO):
@@ -32,20 +97,24 @@ def logger(logfile=None, loglevel=logging.INFO):
 
 
 class VariabilityFinder:
-    def __init__(self, input_dir, output_dir, work_dir=None):
-        self.input_dir = input_dir
-        self.output_dir = output_dir
-        self.work_dir = work_dir if work_dir else input_dir
-        self.raunit = u.deg
-        self.logger = logger(os.path.join(
-            self.work_dir, 'variability_finder.log'))
+    def __init__(self, args, logger=None):
+        self.input_dir = args.inputdir
+        self.output_dir = args.outputdir
+        self.work_dir = args.workdir if args.workdir else self.input_dir
+        self.raunit = u.Unit(args.raunit)
+        self.numproc = args.np
+        self.debug = args.debug
+        self.logger = logger if logger else logging.getLogger(__name__)
         self.unified_data = None
         self.reference_star = None
+        self.coords = None
 
     def load_catalogs(self):
         self.logger.info("Loading catalogs from input directory.")
+        extensions = ('.fits', '.fit', '.fts', '.asc',
+                      '.txt', '.csv', '.dat', '.cat')
         catalog_files = [f for f in os.listdir(
-            self.input_dir) if f.endswith('.fits')]
+            self.input_dir) if f.lower().endswith(extensions)]
         catalogues = []
         for file in catalog_files:
             path = os.path.join(self.input_dir, file)
@@ -59,7 +128,7 @@ class VariabilityFinder:
                     catalogues.append(catalogue)
                 file_has_lodaded = True
             except Exception as e:
-                self.logger.warning(
+                self.logger.error(
                     f"Failed to load {file} as FITS. Trying ASCII. Error: {e}")
                 try:
                     catalogue = ascii.read(path).to_pandas()
@@ -69,7 +138,7 @@ class VariabilityFinder:
                     self.logger.error(
                         f"Failed to load {file} as ASCII. Skipping file. Error: {e}")
             if not file_has_lodaded:
-                self.logger.error(f"Could not load file: {file}")
+                self.logger.critical(f"Could not load file: {file}")
                 return
         return catalogues
 
@@ -99,6 +168,7 @@ class VariabilityFinder:
             'CLASS_STAR': ['CLASS_STAR', 'STAR_CLASS']
         }
         # Standardize column names across catalogues
+        ras_decs = []
         for i, catalogue in enumerate(catalogues):
             for standard_name, variants in column_names_equiv.items():
                 for variant in variants:
@@ -115,31 +185,55 @@ class VariabilityFinder:
                 for col in missing_columns:
                     catalogue[col] = np.nan
 
-        ra_dec = catalogues[0][['RA', 'DEC']].values
-        for catalogue in catalogues[1:]:
-            # gather all stars based on RA and DEC
-            ra_dec = np.vstack(ra_dec, catalogue[['RA', 'DEC']].values)
+            ras_decs.append(catalogue[['RA', 'DEC']].values)
 
-        coords = SkyCoord(
-            ra=ra_dec[:, 0], dec=ra_dec[:, 1], unit=(self.raunit, u.deg))
-        # Internal match with a tolerance of 1 arcsec
-        idx, d2d, _ = coords.match_to_catalog_sky(coords)
-        matched = d2d.arcsec < 1.0
-        unified_coordinates = coords[matched]
-        for i, catalogue in enumerate(catalogues):
-            # Match each catalogue to the unified coordinates
+        ref_coords = SkyCoord(
+            ra=catalogues[0]['RA'].values * self.raunit,
+            dec=catalogues[0]['DEC'].values * u.deg)
+        for catalogue in catalogues[1:]:
             cat_coords = SkyCoord(
                 ra=catalogue['RA'].values * self.raunit,
                 dec=catalogue['DEC'].values * u.deg)
-            idx, d2d, _ = cat_coords.match_to_catalog_sky(unified_coordinates)
+            idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
             matched = d2d.arcsec < 1.0
-            # Add MAG, MAG_ERR, FLUX, FLUX_ERR columns to unified dataset
-            self.unified_data[f'MAG_{i}'] = catalogue['MAG'].values[idx]
-            self.unified_data[f'MAG_ERR_{
-                i}'] = catalogue['MAG_ERR'].values[idx]
-            self.unified_data[f'FLUX_{i}'] = catalogue['FLUX'].values[idx]
-            self.unified_data[f'FLUX_ERR_{
-                i}'] = catalogue['FLUX_ERR'].values[idx]
+            # Add unmatched coordinates to ref_coords
+            unmatched_coords = cat_coords[~matched]
+            ref_coords = SkyCoord(
+                ra=np.concatenate(
+                    [ref_coords.ra.deg, unmatched_coords.ra.deg]) * self.raunit,
+                dec=np.concatenate(
+                    [ref_coords.dec.deg, unmatched_coords.dec.deg]) * u.deg
+            )
+
+        unified_catalogue = pd.DataFrame()
+        unified_catalogue['RA'] = ref_coords.ra.deg
+        unified_catalogue['DEC'] = ref_coords.dec.deg
+        # fill up the columns in the unified catalogue
+        for i, catalogue in enumerate(catalogues):
+            unified_catalogue[f'MAG_{i}'] = np.full(
+                len(unified_catalogue), np.nan)
+            unified_catalogue[f'MAG_ERR_{i}'] = np.full(
+                len(unified_catalogue), np.nan)
+            unified_catalogue[f'FLUX_{i}'] = np.full(
+                len(unified_catalogue), np.nan)
+            unified_catalogue[f'FLUX_ERR_{i}'] = np.full(
+                len(unified_catalogue), np.nan)
+            cat_coords = SkyCoord(
+                ra=catalogue['RA'].values * self.raunit,
+                dec=catalogue['DEC'].values * u.deg)
+            idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
+            matched = d2d.arcsec < 1.0
+            unified_catalogue[f'MAG_{i}'][idx[matched]
+                                          ] = catalogue['MAG'].values[matched]
+            unified_catalogue[f'MAG_ERR_{
+                i}'][idx[matched]] = catalogue['MAG_ERR'].values[matched]
+            unified_catalogue[f'FLUX_{i}'][idx[matched]
+                                           ] = catalogue['FLUX'].values[matched]
+            unified_catalogue[f'FLUX_ERR_{
+                i}'][idx[matched]] = catalogue['FLUX_ERR'].values[matched]
+
+        import pdb
+        pdb.set_trace()
 
     def define_reference_star(self):
         """
@@ -171,3 +265,27 @@ class VariabilityFinder:
         per star both as a CSV with FLUX, FLUX_ERR and/or MAG and MAG_ERR
         columns and MAG - MAG_COMP and a plot showing the light curve.
         """
+
+    def run(self):
+        self.logger.info("Starting variability search process.")
+        catalogues = self.load_catalogs()
+        if not catalogues:
+            self.logger.critical("No catalogs loaded. Exiting.")
+            return
+        self.organize_data(catalogues)
+        import pdb
+        pdb.set_trace()
+        # self.define_reference_star()
+        # self.select_comparison_stars()
+        # self.search_variability()
+        # self.logger.info("Variability search process completed.")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    variability_search = VariabilityFinder(
+        args,
+        logger=logger(logfile=args.logfile,
+                      loglevel=getattr(logging, args.loglevel))
+    )
+    variability_search.run()
