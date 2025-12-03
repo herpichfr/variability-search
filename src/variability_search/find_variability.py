@@ -105,7 +105,7 @@ class VariabilityFinder:
         self.numproc = args.np
         self.debug = args.debug
         self.logger = logger if logger else logging.getLogger(__name__)
-        self.unified_data = None
+        self.unified_catalogue = dict()
         self.reference_star = None
         self.coords = None
 
@@ -168,7 +168,6 @@ class VariabilityFinder:
             'CLASS_STAR': ['CLASS_STAR', 'STAR_CLASS']
         }
         # Standardize column names across catalogues
-        ras_decs = []
         for i, catalogue in enumerate(catalogues):
             for standard_name, variants in column_names_equiv.items():
                 for variant in variants:
@@ -185,12 +184,22 @@ class VariabilityFinder:
                 for col in missing_columns:
                     catalogue[col] = np.nan
 
-            ras_decs.append(catalogue[['RA', 'DEC']].values)
+        # if CLASS_STAR is present, filter out non-stellar objects
+        if 'CLASS_STAR' in catalogues[0].columns:
+            mask = catalogues[0]['CLASS_STAR'] >= 0.8
+            catalogue = catalogues[0][mask]
+        else:
+            self.logger.info(
+                "CLASS_STAR column not found. Skipping star/galaxy separation.")
 
         ref_coords = SkyCoord(
             ra=catalogues[0]['RA'].values * self.raunit,
             dec=catalogues[0]['DEC'].values * u.deg)
+
         for catalogue in catalogues[1:]:
+            if 'CLASS_STAR' in catalogue.columns:
+                mask = catalogue['CLASS_STAR'] >= 0.8
+                catalogue = catalogue[mask]
             cat_coords = SkyCoord(
                 ra=catalogue['RA'].values * self.raunit,
                 dec=catalogue['DEC'].values * u.deg)
@@ -205,33 +214,33 @@ class VariabilityFinder:
                     [ref_coords.dec.deg, unmatched_coords.dec.deg]) * u.deg
             )
 
-        unified_catalogue = pd.DataFrame()
-        unified_catalogue['RA'] = ref_coords.ra.deg
-        unified_catalogue['DEC'] = ref_coords.dec.deg
+        self.unified_catalogue['RA'] = ref_coords.ra.deg
+        self.unified_catalogue['DEC'] = ref_coords.dec.deg
+        _array_size = ref_coords.ra.size
         # fill up the columns in the unified catalogue
         for i, catalogue in enumerate(catalogues):
-            unified_catalogue[f'MAG_{i}'] = np.full(
-                len(unified_catalogue), np.nan)
-            unified_catalogue[f'MAG_ERR_{i}'] = np.full(
-                len(unified_catalogue), np.nan)
-            unified_catalogue[f'FLUX_{i}'] = np.full(
-                len(unified_catalogue), np.nan)
-            unified_catalogue[f'FLUX_ERR_{i}'] = np.full(
-                len(unified_catalogue), np.nan)
+            self.unified_catalogue[f'MAG_{i}'] = np.full(_array_size, np.nan)
+            self.unified_catalogue[f'MAG_ERR_{
+                i}'] = np.full(_array_size, np.nan)
+            self.unified_catalogue[f'FLUX_{i}'] = np.full(_array_size, np.nan)
+            self.unified_catalogue[f'FLUX_ERR_{
+                i}'] = np.full(_array_size, np.nan)
             cat_coords = SkyCoord(
                 ra=catalogue['RA'].values * self.raunit,
                 dec=catalogue['DEC'].values * u.deg)
             idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
             matched = d2d.arcsec < 1.0
-            unified_catalogue[f'MAG_{i}'][idx[matched]
-                                          ] = catalogue['MAG'].values[matched]
-            unified_catalogue[f'MAG_ERR_{
+            self.unified_catalogue[f'MAG_{i}'][idx[matched]
+                                               ] = catalogue['MAG'].values[matched]
+            self.unified_catalogue[f'MAG_ERR_{
                 i}'][idx[matched]] = catalogue['MAG_ERR'].values[matched]
-            unified_catalogue[f'FLUX_{i}'][idx[matched]
-                                           ] = catalogue['FLUX'].values[matched]
-            unified_catalogue[f'FLUX_ERR_{
+            self.unified_catalogue[f'FLUX_{i}'][idx[matched]
+                                                ] = catalogue['FLUX'].values[matched]
+            self.unified_catalogue[f'FLUX_ERR_{
                 i}'][idx[matched]] = catalogue['FLUX_ERR'].values[matched]
 
+        self.unified_catalogue = pd.DataFrame(self.unified_catalogue)
+        self.logger.info("Data organization complete.")
         import pdb
         pdb.set_trace()
 
