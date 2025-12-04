@@ -97,14 +97,14 @@ class VariabilitySearch:
         # Identify candidate reference stars based on brightness criteria
         _ref_column = 'MAG'
         _min_mag = 4.0
-        _flux_columns = [
+        _mag_columns = [
             col for col in self.unified_catalogue.columns if col.startswith(f'{_ref_column}_') and 'ERR' not in col]
         mask = (self.unified_catalogue[f'{_ref_column}_0'] >= _min_mag) & (
             self.unified_catalogue[f'{_ref_column}_0'] < np.percentile(
                 self.unified_catalogue[f'{_ref_column}_0'][~np.isnan(self.unified_catalogue[f'{_ref_column}_0'])], 95))
-        print('min mag for column', _flux_columns[0], min(self.unified_catalogue[_flux_columns[0]]), 'and max mag',
-              np.percentile(self.unified_catalogue[_flux_columns[0]][~np.isnan(self.unified_catalogue[_flux_columns[0]])], 95))
-        for col in _flux_columns[1:]:
+        print('min mag for column', _mag_columns[0], min(self.unified_catalogue[_mag_columns[0]]), 'and max mag',
+              np.percentile(self.unified_catalogue[_mag_columns[0]][~np.isnan(self.unified_catalogue[_mag_columns[0]])], 95))
+        for col in _mag_columns[1:]:
             mask &= (self.unified_catalogue[col] >= 8.0) & (
                 self.unified_catalogue[col] < np.percentile(
                     self.unified_catalogue[col][~np.isnan(self.unified_catalogue[col])], 95))
@@ -116,7 +116,7 @@ class VariabilitySearch:
         # outliers based on their light curves
 
         # Create a matrix with the light curves of the candidate stars
-        light_curves = candidate_stars[_flux_columns].to_numpy()
+        light_curves = candidate_stars[_mag_columns].to_numpy()
         # Compute the standard deviation of each light curve
         std_devs = np.nanstd(light_curves, axis=1)
         # Remove the 5% of stars with the highest standard deviation
@@ -127,7 +127,7 @@ class VariabilitySearch:
 
         # Calculate the median light curve of the stable stars
         median_light_curve = np.nanmedian(
-            stable_stars[_flux_columns].to_numpy(), axis=0)
+            stable_stars[_mag_columns].to_numpy(), axis=0)
 
         if self.debug:
             self.logger.debug(
@@ -148,8 +148,30 @@ class VariabilitySearch:
         stars. The comparison stars correspond to the median magnitude or
         flux within bins of similar brightness.
         """
+        # Find the 5% more stable stars after subtracting the reference light curve
+        self.logger.info("Selecting comparison stars based on variability.")
+        _ref_column = 'MAG'
+        _mag_columns = [
+            col for col in self.unified_catalogue.columns if col.startswith(f'{_ref_column}_') and 'ERR' not in col]
+        light_curves = stable_stars[_mag_columns].to_numpy()
+        # Subtract the reference light curve
+        adjusted_light_curves = light_curves - reference_light_curve
+        # Compute the standard deviation of each adjusted light curve
+        std_devs = np.nanstd(adjusted_light_curves, axis=1)
+        # Select stars below the variability threshold
+        comparison_stars = stable_stars[std_devs <= variability_threshold]
+        self.logger.info(f"Selected {len(comparison_stars)
+                                     } comparison stars after applying variability threshold of {variability_threshold}.")
+        if self.debug:
+            import pdb
+            pdb.set_trace()
 
-    def search_variability(self):
+        return comparison_stars
+
+    def search_variability(self,
+                           reference_light_curve: np.ndarray,
+                           comparison_stars: pd.DataFrame
+                           ):
         """
         Search for variability in the unified dataset.
         The method computes the variability metrics for each star and
@@ -162,6 +184,7 @@ class VariabilitySearch:
     def run(self):
         self.logger.info("Starting variability search process.")
         stable_stars, median_light_curve = self.define_reference_star()
+        self.select_comparison_stars(stable_stars, median_light_curve)
 
 
 if __name__ == "__main__":
