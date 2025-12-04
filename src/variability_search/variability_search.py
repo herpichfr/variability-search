@@ -7,6 +7,8 @@ import os
 import numpy as np
 import pandas as pd
 
+from variability_search import __version__
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -15,7 +17,7 @@ def parse_arguments():
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.0.0",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "inputdir",
