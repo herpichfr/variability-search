@@ -1,8 +1,9 @@
 #!/bin/python3
 
-import os
-import sys
 import argparse
+import logging
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -86,7 +87,8 @@ class VariabilitySearch:
         stars.
         """
         # TODO: Implement the logic to define the reference star.
-        # NOTE: Could use the average flux of the more stable and well constrained stars.
+        # NOTE: Could use the average flux of the more stable and well
+        # constrained stars.
         # load unified dataset
         self.logger.info("Defining reference star from unified catalogue.")
         unified_catalogue = pd.read_csv(os.path.join(
@@ -121,6 +123,6 @@ class VariabilitySearch:
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    args = parse_arguments()
     variability_search = VariabilitySearch(args)
     variability_search.run()

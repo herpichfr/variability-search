@@ -1,14 +1,16 @@
 #!/bin/python3
 
-import os
 import argparse
-from astropy.io import fits, ascii
-from astropy.coordinates import SkyCoord
-from astropy import units as u
+import logging
+import os
+
 import numpy as np
 import pandas as pd
-import logging
-from src.variability_search import __version__
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.io import ascii, fits
+
+from variability_search import __version__
 
 
 def parse_args():
@@ -192,7 +194,9 @@ class PrepareCatalogues:
                 col for col in required_columns if col not in catalogue.columns]
             if missing_columns:
                 self.logger.warning(
-                    f"Catalog {i} is missing columns: {missing_columns}. Filling with NaN.")
+                    f"Catalog {i} is missing columns: {missing_columns}. "
+                    f"Filling with NaN."
+                )
                 for col in missing_columns:
                     catalogue[col] = np.nan
 
