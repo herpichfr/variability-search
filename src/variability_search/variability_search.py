@@ -7,17 +7,10 @@ import os
 import numpy as np
 import pandas as pd
 
-from variability_search import __version__
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Search for variability in astronomical observations"
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "inputdir",
@@ -73,13 +66,21 @@ def parse_arguments():
 
 
 class VariabilitySearch:
-    def __init__(self, args, logger=logging.getLogger(__name__)):
+    def __init__(self,
+                 args,
+                 unified_catalogue: pd.DataFrame | None = None,
+                 logger=logging.getLogger(__name__)
+                 ):
         self.logger = logger
         self.inputdir = args.inputdir
         self.workdir = args.workdir if args.workdir else args.inputdir
         self.outputdir = args.outputdir
         self.raunit = args.raunit
         self.np = args.np
+        self.output = args.output if args.output else os.path.join(
+            self.outputdir, "variability_results.csv")
+        self.debug = args.debug
+        self.unified_catalogue = unified_catalogue
 
     def define_reference_star(self):
         """
@@ -88,20 +89,59 @@ class VariabilitySearch:
         stars and cap at the 50th percentile to avoid low signal-to-noise
         stars.
         """
-        # TODO: Implement the logic to define the reference star.
-        # NOTE: Could use the average flux of the more stable and well
-        # constrained stars.
         # load unified dataset
         self.logger.info("Defining reference star from unified catalogue.")
-        unified_catalogue = pd.read_csv(os.path.join(
-            self.workdir, "unified_catalogue.csv"))
+        if self.unified_catalogue is None:
+            unified_catalogue = pd.read_csv(os.path.join(
+                self.workdir, "unified_catalogue.csv"))
         # Identify candidate reference stars based on brightness criteria
-        mask = (unified_catalogue['FLUX'] < 50000) & (
-            unified_catalogue['FLUX'] > np.percentile(unified_catalogue['FLUX'], 50))
-        import pdb
-        pdb.set_trace()
+        _ref_column = 'MAG'
+        _min_mag = 4.0
+        _flux_columns = [
+            col for col in self.unified_catalogue.columns if col.startswith(f'{_ref_column}_') and 'ERR' not in col]
+        mask = (self.unified_catalogue[f'{_ref_column}_0'] >= _min_mag) & (
+            self.unified_catalogue[f'{_ref_column}_0'] < np.percentile(
+                self.unified_catalogue[f'{_ref_column}_0'][~np.isnan(self.unified_catalogue[f'{_ref_column}_0'])], 95))
+        print('min mag for column', _flux_columns[0], min(self.unified_catalogue[_flux_columns[0]]), 'and max mag',
+              np.percentile(self.unified_catalogue[_flux_columns[0]][~np.isnan(self.unified_catalogue[_flux_columns[0]])], 95))
+        for col in _flux_columns[1:]:
+            mask &= (self.unified_catalogue[col] >= 8.0) & (
+                self.unified_catalogue[col] < np.percentile(
+                    self.unified_catalogue[col][~np.isnan(self.unified_catalogue[col])], 95))
+        candidate_stars = self.unified_catalogue[mask]
+        self.logger.info(f"Found {len(candidate_stars)
+                                  } candidate reference stars.")
 
-    def select_comparison_stars(self, threshold=0.01):
+        # Iterate over the selected candidate stars to remove variable stars or
+        # outliers based on their light curves
+
+        # Create a matrix with the light curves of the candidate stars
+        light_curves = candidate_stars[_flux_columns].to_numpy()
+        # Compute the standard deviation of each light curve
+        std_devs = np.nanstd(light_curves, axis=1)
+        # Remove the 5% of stars with the highest standard deviation
+        threshold = np.percentile(std_devs, 95)
+        stable_stars = candidate_stars[std_devs <= threshold]
+        self.logger.info(f"Selected {len(stable_stars)
+                                     } stable reference stars after variability filtering.")
+
+        # Calculate the median light curve of the stable stars
+        median_light_curve = np.nanmedian(
+            stable_stars[_flux_columns].to_numpy(), axis=0)
+
+        if self.debug:
+            self.logger.debug(
+                f"Median light curve of reference stars: {median_light_curve}")
+            import pdb
+            pdb.set_trace()
+
+        return stable_stars, median_light_curve
+
+    def select_comparison_stars(self,
+                                stable_stars: pd.DataFrame,
+                                reference_light_curve: np.ndarray,
+                                variability_threshold: float = 0.01
+                                ):
         """
         Select comparison stars based on variability threshold.
         The method is iterative to remove higher-than-threshold variability
@@ -121,7 +161,7 @@ class VariabilitySearch:
 
     def run(self):
         self.logger.info("Starting variability search process.")
-        self.define_reference_star()
+        stable_stars, median_light_curve = self.define_reference_star()
 
 
 if __name__ == "__main__":

@@ -10,18 +10,11 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import ascii, fits
 
-from variability_search import __version__
-
 
 def parse_args():
     """Main entry point for the variability-search CLI."""
     parser = argparse.ArgumentParser(
         description="Search for variability in astronomical observations"
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "inputdir",

@@ -3,9 +3,9 @@
 import argparse
 import logging
 
-from variability_search import __version__
-from variability_search.prepare_catalogues import PrepareCatalogues
-from variability_search.variability_search import VariabilitySearch
+from src.variability_search import __version__
+from src.variability_search.prepare_catalogues import PrepareCatalogues
+from src.variability_search.variability_search import VariabilitySearch
 
 
 def logger(logfile=None, loglevel=logging.INFO):
@@ -105,11 +105,12 @@ def main():
     # Step 1: Run prepare_catalogues.py
     log.info("Step 1: Preparing catalogues...")
     preparer = PrepareCatalogues(args, logger=log)
-    preparer.run()
+    unified_catalogue = preparer.run()
 
     # Step 2: Run variability_search.py
     log.info("Step 2: Searching for variability...")
-    variability_searcher = VariabilitySearch(args, logger=log)
+    variability_searcher = VariabilitySearch(
+        args, unified_catalogue=unified_catalogue, logger=log)
     variability_searcher.run()
 
 
