@@ -3,9 +3,9 @@
 import argparse
 import logging
 
-from src.variability_search import __version__
-from src.variability_search.prepare_catalogues import PrepareCatalogues
-from src.variability_search.variability_finder import VariabilityFinder
+from variability_search import __version__
+from variability_search.prepare_catalogues import PrepareCatalogues
+from variability_search.variability_search import VariabilitySearch
 
 
 def logger(logfile=None, loglevel=logging.INFO):
@@ -70,6 +70,11 @@ def parse_args():
         help="Path to output file",
     )
     parser.add_argument(
+        "--save_output",
+        action="store_true",
+        help="Save output files",
+    )
+    parser.add_argument(
         "-l",
         "--logfile",
         help="Path to log file",
@@ -91,12 +96,22 @@ def parse_args():
     return args
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the variability-search CLI."""
     args = parse_args()
-    logger = logger(logfile=args.logfile,
-                    loglevel=getattr(logging, args.loglevel))
-    preparer = PrepareCatalogues(
-        args,
-        logger=logger
-    )
-    output_catalogue = preparer.run()
+    log = logger(logfile=args.logfile,
+                 loglevel=getattr(logging, args.loglevel))
+
+    # Step 1: Run prepare_catalogues.py
+    log.info("Step 1: Preparing catalogues...")
+    preparer = PrepareCatalogues(args, logger=log)
+    preparer.run()
+
+    # Step 2: Run variability_search.py
+    log.info("Step 2: Searching for variability...")
+    variability_searcher = VariabilitySearch(args, logger=log)
+    variability_searcher.run()
+
+
+if __name__ == "__main__":
+    main()
