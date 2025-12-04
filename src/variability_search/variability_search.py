@@ -81,6 +81,8 @@ class VariabilitySearch:
             self.outputdir, "variability_results.csv")
         self.debug = args.debug
         self.unified_catalogue = unified_catalogue
+        self.ref_column_name = 'MAG'
+        self.mag_column_names = list()
 
     def define_reference_star(self):
         """
@@ -95,16 +97,15 @@ class VariabilitySearch:
             unified_catalogue = pd.read_csv(os.path.join(
                 self.workdir, "unified_catalogue.csv"))
         # Identify candidate reference stars based on brightness criteria
-        _ref_column = 'MAG'
         _min_mag = 4.0
-        _mag_columns = [
-            col for col in self.unified_catalogue.columns if col.startswith(f'{_ref_column}_') and 'ERR' not in col]
-        mask = (self.unified_catalogue[f'{_ref_column}_0'] >= _min_mag) & (
-            self.unified_catalogue[f'{_ref_column}_0'] < np.percentile(
-                self.unified_catalogue[f'{_ref_column}_0'][~np.isnan(self.unified_catalogue[f'{_ref_column}_0'])], 95))
-        print('min mag for column', _mag_columns[0], min(self.unified_catalogue[_mag_columns[0]]), 'and max mag',
-              np.percentile(self.unified_catalogue[_mag_columns[0]][~np.isnan(self.unified_catalogue[_mag_columns[0]])], 95))
-        for col in _mag_columns[1:]:
+        self.mag_column_names = [
+            col for col in self.unified_catalogue.columns if col.startswith(f'{self.ref_column_name}_') and 'ERR' not in col]
+        mask = (self.unified_catalogue[f'{self.ref_column_name}_0'] >= _min_mag) & (
+            self.unified_catalogue[f'{self.ref_column_name}_0'] < np.percentile(
+                self.unified_catalogue[f'{self.ref_column_name}_0'][~np.isnan(self.unified_catalogue[f'{self.ref_column_name}_0'])], 95))
+        print('min mag for column', self.mag_column_names[0], min(self.unified_catalogue[self.mag_column_names[0]]), 'and max mag',
+              np.percentile(self.unified_catalogue[self.mag_column_names[0]][~np.isnan(self.unified_catalogue[self.mag_column_names[0]])], 95))
+        for col in self.mag_column_names[1:]:
             mask &= (self.unified_catalogue[col] >= 8.0) & (
                 self.unified_catalogue[col] < np.percentile(
                     self.unified_catalogue[col][~np.isnan(self.unified_catalogue[col])], 95))
@@ -116,7 +117,7 @@ class VariabilitySearch:
         # outliers based on their light curves
 
         # Create a matrix with the light curves of the candidate stars
-        light_curves = candidate_stars[_mag_columns].to_numpy()
+        light_curves = candidate_stars[self.mag_column_names].to_numpy()
         # Compute the standard deviation of each light curve
         std_devs = np.nanstd(light_curves, axis=1)
         # Remove the 5% of stars with the highest standard deviation
@@ -127,7 +128,7 @@ class VariabilitySearch:
 
         # Calculate the median light curve of the stable stars
         median_light_curve = np.nanmedian(
-            stable_stars[_mag_columns].to_numpy(), axis=0)
+            stable_stars[self.mag_column_names].to_numpy(), axis=0)
 
         if self.debug:
             self.logger.debug(
@@ -150,10 +151,7 @@ class VariabilitySearch:
         """
         # Find the 5% more stable stars after subtracting the reference light curve
         self.logger.info("Selecting comparison stars based on variability.")
-        _ref_column = 'MAG'
-        _mag_columns = [
-            col for col in self.unified_catalogue.columns if col.startswith(f'{_ref_column}_') and 'ERR' not in col]
-        light_curves = stable_stars[_mag_columns].to_numpy()
+        light_curves = stable_stars[self.mag_column_names].to_numpy()
         # Subtract the reference light curve
         adjusted_light_curves = light_curves - reference_light_curve
         # Compute the standard deviation of each adjusted light curve
@@ -180,11 +178,38 @@ class VariabilitySearch:
         per star both as a CSV with FLUX, FLUX_ERR and/or MAG and MAG_ERR
         columns and MAG - MAG_COMP and a plot showing the light curve.
         """
+        # Clean unified_catalogue to exclude stars that have less than two observations that are not NaN
+        self.logger.info("Searching for variability in the unified catalogue.")
+        unified_catalogue = self.unified_catalogue.copy()
+        valid_obs_mask = unified_catalogue[self.mag_column_names].notna().sum(
+            axis=1) >= 2
+        unified_catalogue = unified_catalogue[valid_obs_mask]
+        # Compute the average light curve of the comparison stars
+        comparison_light_curve = np.nanmedian(
+            comparison_stars[self.mag_column_names].to_numpy(), axis=0)
+        # Iterate over all stars in the unified catalogue to compute variability
+        variability_results = []
+        for index, star in unified_catalogue.iterrows():
+            star_light_curve = star[self.mag_column_names].to_numpy()
+            # Subtract the reference light curve from the star's light curve
+            star_light_curve = star_light_curve - reference_light_curve
+            # Compute the differential light curve
+            differential_light_curve = star_light_curve - comparison_light_curve
+            # Compute variability metrics (e.g., standard deviation)
+            std_dev = np.nanstd(differential_light_curve)
+            variability_results.append({
+                'STAR_ID': star['STAR_ID'],
+                'STD_DEV': std_dev
+            })
+            # TODO: Implement saving individual star results and plots
 
     def run(self):
         self.logger.info("Starting variability search process.")
         stable_stars, median_light_curve = self.define_reference_star()
-        self.select_comparison_stars(stable_stars, median_light_curve)
+        comparison_stars = self.select_comparison_stars(
+            stable_stars, median_light_curve)
+        self.search_variability(median_light_curve, comparison_stars)
+        self.logger.info("Variability search process completed.")
 
 
 if __name__ == "__main__":
