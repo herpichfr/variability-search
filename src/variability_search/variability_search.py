@@ -81,8 +81,8 @@ class VariabilitySearch:
             self.outputdir, "variability_results.csv")
         self.debug = args.debug
         self.unified_catalogue = unified_catalogue
-        self.ref_column_name = 'MAG'
-        self.mag_column_names = list()
+        self.ref_column_name = 'FLUX'
+        self.flux_column_names = list()
 
     def define_reference_star(self):
         """
@@ -97,18 +97,30 @@ class VariabilitySearch:
             unified_catalogue = pd.read_csv(os.path.join(
                 self.workdir, "unified_catalogue.csv"))
         # Identify candidate reference stars based on brightness criteria
+        # Use mags to determine the limits in fluxes
         _min_mag = 4.0
-        self.mag_column_names = [
+        _max_mag = np.percentile(
+            self.unified_catalogue['MAG_0'][~np.isnan(self.unified_catalogue['MAG_0'])], 95)
+        mask = (self.unified_catalogue['MAG_0'] >= _min_mag) & (
+            self.unified_catalogue['MAG_0'] < _max_mag)
+        _min_flux, _max_flux = self.unified_catalogue['FLUX_0'][mask].min(
+        ), self.unified_catalogue['FLUX_0'][mask].max()
+
+        self.flux_columnames = [
             col for col in self.unified_catalogue.columns if col.startswith(f'{self.ref_column_name}_') and 'ERR' not in col]
-        mask = (self.unified_catalogue[f'{self.ref_column_name}_0'] >= _min_mag) & (
-            self.unified_catalogue[f'{self.ref_column_name}_0'] < np.percentile(
-                self.unified_catalogue[f'{self.ref_column_name}_0'][~np.isnan(self.unified_catalogue[f'{self.ref_column_name}_0'])], 95))
-        print('min mag for column', self.mag_column_names[0], min(self.unified_catalogue[self.mag_column_names[0]]), 'and max mag',
-              np.percentile(self.unified_catalogue[self.mag_column_names[0]][~np.isnan(self.unified_catalogue[self.mag_column_names[0]])], 95))
-        for col in self.mag_column_names[1:]:
-            mask &= (self.unified_catalogue[col] >= 8.0) & (
-                self.unified_catalogue[col] < np.percentile(
-                    self.unified_catalogue[col][~np.isnan(self.unified_catalogue[col])], 95))
+
+        mask = (self.unified_catalogue[f'{self.ref_column_name}_0'] > _min_flux) & (
+            self.unified_catalogue[f'{self.ref_column_name}_0'] <= _max_flux)
+
+        print('min flux for column',
+              self.flux_columnames[0],
+              min(self.unified_catalogue[self.flux_columnames[0]]),
+              'and max flux',
+              np.percentile(self.unified_catalogue[self.flux_columnames[0]][~np.isnan(self.unified_catalogue[self.flux_columnames[0]])], 95))
+
+        for col in self.flux_columnames[1:]:
+            mask &= (self.unified_catalogue[col] > _min_flux) & (
+                self.unified_catalogue[col] <= _max_flux)
         candidate_stars = self.unified_catalogue[mask]
         self.logger.info(f"Found {len(candidate_stars)
                                   } candidate reference stars.")
@@ -117,7 +129,7 @@ class VariabilitySearch:
         # outliers based on their light curves
 
         # Create a matrix with the light curves of the candidate stars
-        light_curves = candidate_stars[self.mag_column_names].to_numpy()
+        light_curves = candidate_stars[self.flux_columnames].to_numpy()
         # Compute the standard deviation of each light curve
         std_devs = np.nanstd(light_curves, axis=1)
         # Remove the 5% of stars with the highest standard deviation
@@ -128,7 +140,7 @@ class VariabilitySearch:
 
         # Calculate the median light curve of the stable stars
         median_light_curve = np.nanmedian(
-            stable_stars[self.mag_column_names].to_numpy(), axis=0)
+            stable_stars[self.flux_columnames].to_numpy(), axis=0)
 
         if self.debug:
             self.logger.debug(
@@ -141,7 +153,7 @@ class VariabilitySearch:
     def select_comparison_stars(self,
                                 stable_stars: pd.DataFrame,
                                 reference_light_curve: np.ndarray,
-                                variability_threshold: float = 0.01
+                                variability_threshold: float = 0.02  # TODO: Verify appropriate threshold
                                 ):
         """
         Select comparison stars based on variability threshold.
@@ -151,9 +163,9 @@ class VariabilitySearch:
         """
         # Find the 5% more stable stars after subtracting the reference light curve
         self.logger.info("Selecting comparison stars based on variability.")
-        light_curves = stable_stars[self.mag_column_names].to_numpy()
+        light_curves = stable_stars[self.flux_columnames].to_numpy()
         # Subtract the reference light curve
-        adjusted_light_curves = light_curves - reference_light_curve
+        adjusted_light_curves = light_curves / reference_light_curve
         # Compute the standard deviation of each adjusted light curve
         std_devs = np.nanstd(adjusted_light_curves, axis=1)
         # Select stars below the variability threshold
@@ -181,22 +193,27 @@ class VariabilitySearch:
         # Clean unified_catalogue to exclude stars that have less than two observations that are not NaN
         self.logger.info("Searching for variability in the unified catalogue.")
         unified_catalogue = self.unified_catalogue.copy()
-        valid_obs_mask = unified_catalogue[self.mag_column_names].notna().sum(
+        valid_obs_mask = unified_catalogue[self.flux_columnames].notna().sum(
             axis=1) >= 2
         unified_catalogue = unified_catalogue[valid_obs_mask]
         # Compute the average light curve of the comparison stars
         comparison_light_curve = np.nanmedian(
-            comparison_stars[self.mag_column_names].to_numpy(), axis=0)
+            comparison_stars[self.flux_columnames].to_numpy(), axis=0)
         # Iterate over all stars in the unified catalogue to compute variability
         variability_results = []
         for index, star in unified_catalogue.iterrows():
-            star_light_curve = star[self.mag_column_names].to_numpy()
+            star_light_curve = star[self.flux_columnames].to_numpy()
             # Subtract the reference light curve from the star's light curve
-            star_light_curve = star_light_curve - reference_light_curve
+            star_light_curve = star_light_curve / reference_light_curve
             # Compute the differential light curve
             differential_light_curve = star_light_curve - comparison_light_curve
             # Compute variability metrics (e.g., standard deviation)
             std_dev = np.nanstd(differential_light_curve)
+            import pdb
+            pdb.set_trace()
+            # TODO: Define proper output format for results
+            raise NotImplementedError(
+                "Output format for variability results not implemented.")
             variability_results.append({
                 'STAR_ID': star['STAR_ID'],
                 'STD_DEV': std_dev
