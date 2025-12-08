@@ -6,6 +6,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 def parse_arguments():
@@ -74,11 +75,12 @@ class VariabilitySearch:
         self.logger = logger
         self.inputdir = args.inputdir
         self.workdir = args.workdir if args.workdir else args.inputdir
-        self.outputdir = args.outputdir
+        self.outputdir = args.outputdir if args.outputdir else self.workdir
         self.raunit = args.raunit
         self.np = args.np
         self.output = args.output if args.output else os.path.join(
             self.outputdir, "variability_results.csv")
+        self.save_output = True if args.output else False
         self.debug = args.debug
         self.unified_catalogue = unified_catalogue
         self.ref_column_name = 'FLUX'
@@ -94,7 +96,7 @@ class VariabilitySearch:
         # load unified dataset
         self.logger.info("Defining reference star from unified catalogue.")
         if self.unified_catalogue is None:
-            unified_catalogue = pd.read_csv(os.path.join(
+            self.unified_catalogue = pd.read_csv(os.path.join(
                 self.workdir, "unified_catalogue.csv"))
         # Identify candidate reference stars based on brightness criteria
         # Use mags to determine the limits in fluxes
@@ -200,8 +202,9 @@ class VariabilitySearch:
         comparison_light_curve = np.nanmedian(
             comparison_stars[self.flux_columnames].to_numpy(), axis=0)
         # Iterate over all stars in the unified catalogue to compute variability
-        variability_results = []
-        for index, star in unified_catalogue.iterrows():
+        variability_results = pd.DataFrame(
+            columns=[f'REL_FLUX_{i}' for i in range(len(self.flux_columnames))] + ['STD_DEV'])
+        for index, star in unified_catalogue[:2].iterrows():
             star_light_curve = star[self.flux_columnames].to_numpy()
             # Subtract the reference light curve from the star's light curve
             star_light_curve = star_light_curve / reference_light_curve
@@ -209,16 +212,40 @@ class VariabilitySearch:
             differential_light_curve = star_light_curve - comparison_light_curve
             # Compute variability metrics (e.g., standard deviation)
             std_dev = np.nanstd(differential_light_curve)
-            import pdb
-            pdb.set_trace()
-            # TODO: Define proper output format for results
-            raise NotImplementedError(
-                "Output format for variability results not implemented.")
-            variability_results.append({
-                'STAR_ID': star['STAR_ID'],
-                'STD_DEV': std_dev
-            })
-            # TODO: Implement saving individual star results and plots
+            variability_results.loc[index] = list(
+                differential_light_curve) + [std_dev]
+            fig = plt.figure(figsize=(10, 6))
+            plt.errorbar(range(len(star_light_curve)), star_light_curve,
+                         yerr=[star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
+                             i}' in star else 0 for i in range(len(self.flux_columnames))],
+                         fmt='o', label='Star Light Curve')
+            plt.errorbar(range(len(reference_light_curve)), reference_light_curve,
+                         fmt='o', label='Reference Light Curve')
+            plt.errorbar(range(len(comparison_light_curve)), comparison_light_curve,
+                         fmt='o', label='Comparison Light Curve')
+            plt.xlabel('Observation Index')
+            plt.ylabel('Relative Flux')
+            plt.title(f'Variability Analysis for Star index {index}')
+            plt.legend()
+            plt.grid()
+            plt.show()
+            if self.debug:
+                ask = input("Continue showing plots? (y/n): ")
+                if ask.lower() != 'y':
+                    plt.close('all')
+                    break
+            plt.close(fig)
+
+        # Merge the two dataframes
+        final_results = pd.concat(
+            [unified_catalogue.reset_index(drop=True), variability_results.reset_index(drop=True)], axis=1)
+        import pdb
+        pdb.set_trace()
+        if self.save_output:
+            # Save the results to the output file
+            final_results.to_csv(self.output, index=False)
+            self.logger.info(
+                f"Variability results saved to {self.output}.")
 
     def run(self):
         self.logger.info("Starting variability search process.")
