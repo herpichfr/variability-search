@@ -50,7 +50,7 @@ def parse_args():
     )
     parser.add_argument(
         "--outputdir",
-        default="output",
+        default=None,
         help="Path to output directory. Default is 'output'.",
     )
     parser.add_argument(
@@ -73,6 +73,11 @@ def parse_args():
         "--save_output",
         action="store_true",
         help="Save output files",
+    )
+    parser.add_argument(
+        "--save_plots",
+        action="store_true",
+        help="Save diagnostic plots",
     )
     parser.add_argument(
         "-l",

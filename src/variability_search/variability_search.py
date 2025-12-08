@@ -80,7 +80,8 @@ class VariabilitySearch:
         self.np = args.np
         self.output = args.output if args.output else os.path.join(
             self.outputdir, "variability_results.csv")
-        self.save_output = True if args.output else False
+        self.save_output = args.save_output
+        self.save_plots = args.save_plots
         self.debug = args.debug
         self.unified_catalogue = unified_catalogue
         self.ref_column_name = 'FLUX'
@@ -204,7 +205,7 @@ class VariabilitySearch:
         # Iterate over all stars in the unified catalogue to compute variability
         variability_results = pd.DataFrame(
             columns=[f'REL_FLUX_{i}' for i in range(len(self.flux_columnames))] + ['STD_DEV'])
-        for index, star in unified_catalogue[:2].iterrows():
+        for index, star in unified_catalogue.iterrows():
             star_light_curve = star[self.flux_columnames].to_numpy()
             # Subtract the reference light curve from the star's light curve
             star_light_curve = star_light_curve / reference_light_curve
@@ -228,24 +229,32 @@ class VariabilitySearch:
             plt.title(f'Variability Analysis for Star index {index}')
             plt.legend()
             plt.grid()
-            plt.show()
             if self.debug:
+                plt.show()
                 ask = input("Continue showing plots? (y/n): ")
                 if ask.lower() != 'y':
                     plt.close('all')
                     break
+            if self.save_plots:
+                _run_number = f"{index:05d}"
+                plot_path = os.path.join(
+                    self.outputdir, f'plots/variability_star_{_run_number}.png')
+                fig.savefig(plot_path)
+                self.logger.info(
+                    f"Variability plot saved to {plot_path}.")
             plt.close(fig)
 
         # Merge the two dataframes
         final_results = pd.concat(
             [unified_catalogue.reset_index(drop=True), variability_results.reset_index(drop=True)], axis=1)
-        import pdb
-        pdb.set_trace()
         if self.save_output:
             # Save the results to the output file
             final_results.to_csv(self.output, index=False)
             self.logger.info(
                 f"Variability results saved to {self.output}.")
+        if self.debug:
+            import pdb
+            pdb.set_trace()
 
     def run(self):
         self.logger.info("Starting variability search process.")
