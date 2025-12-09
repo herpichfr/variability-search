@@ -207,7 +207,7 @@ class VariabilitySearch:
         if self.np < 2:
             variability_results = pd.DataFrame(
                 columns=[f'REL_FLUX_{i}' for i in range(len(self.flux_columnames))] + ['STD_DEV'])
-            for index, star in unified_catalogue.iterrows():
+            for index, star in unified_catalogue[:2].iterrows():
                 star_light_curve = star[self.flux_columnames].to_numpy()
                 # Subtract the reference light curve from the star's light curve
                 star_light_curve = star_light_curve / reference_light_curve
@@ -217,20 +217,6 @@ class VariabilitySearch:
                 std_dev = np.nanstd(differential_light_curve)
                 variability_results.loc[index] = list(
                     differential_light_curve) + [std_dev]
-                fig = plt.figure(figsize=(10, 6))
-                plt.errorbar(range(len(star_light_curve)), star_light_curve,
-                             yerr=[star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
-                                 i}' in star else 0 for i in range(len(self.flux_columnames))],
-                             fmt='o', label='Star Light Curve')
-                plt.errorbar(range(len(reference_light_curve)), reference_light_curve,
-                             fmt='o', label='Reference Light Curve')
-                plt.errorbar(range(len(comparison_light_curve)), comparison_light_curve,
-                             fmt='o', label='Comparison Light Curve')
-                plt.xlabel('Observation Index')
-                plt.ylabel('Relative Flux')
-                plt.title(f'Variability Analysis for Star index {index}')
-                plt.legend()
-                plt.grid()
                 if self.debug:
                     plt.show()
                     ask = input("Continue showing plots? (y/n): ")
@@ -238,13 +224,16 @@ class VariabilitySearch:
                         plt.close('all')
                         break
                 if self.save_plots:
-                    _run_number = f"{index:05d}"
-                    plot_path = os.path.join(
-                        self.outputdir, f'plots/variability_star_{_run_number}.png')
-                    fig.savefig(plot_path)
-                    self.logger.info(
-                        f"Variability plot saved to {plot_path}.")
-                plt.close(fig)
+                    plot_light_curve(
+                        star_light_curve,
+                        reference_light_curve,
+                        comparison_light_curve,
+                        self.flux_columnames,
+                        index,
+                        star,
+                        self.outputdir,
+                        logger=self.logger
+                    )
 
             # Merge the two dataframes
             final_results = pd.concat(
@@ -314,27 +303,16 @@ def process_source(
         differential_light_curve) + [std_dev]
 
     if save_plot:
-        fig = plt.figure(figsize=(10, 6))
-        plt.errorbar(range(len(star_light_curve)), star_light_curve,
-                     yerr=[source[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
-                         i}' in source else 0 for i in range(len(flux_columnames))],
-                     fmt='o', label='Star Light Curve')
-        plt.errorbar(range(len(ref_light_curve)), ref_light_curve,
-                     fmt='o', label='Reference Light Curve')
-        plt.errorbar(range(len(comp_light_curve)), comp_light_curve,
-                     fmt='o', label='Comparison Light Curve')
-        plt.xlabel('Observation Index')
-        plt.ylabel('Relative Flux')
-        plt.title(f'Variability Analysis for Star index {index}')
-        plt.legend()
-        plt.grid()
-        _run_number = f"{index:05d}"
-        plot_path = os.path.join(
-            outputdir, f'plots/variability_star_{_run_number}.png')
-        fig.savefig(plot_path)
-        logger.info(
-            f"Variability plot saved to {plot_path}.")
-        plt.close(fig)
+        plot_light_curve(
+            star_light_curve,
+            ref_light_curve,
+            comp_light_curve,
+            flux_columnames,
+            index,
+            source,
+            outputdir,
+            logger
+        )
 
     return variability_results
 
@@ -343,6 +321,7 @@ def plot_light_curve(
     star_light_curve: np.ndarray,
     reference_light_curve: np.ndarray,
     comparison_light_curve: np.ndarray,
+    flux_columnames: list[str],
     index: int,
     star: pd.Series,
     outputdir: str,
@@ -353,7 +332,7 @@ def plot_light_curve(
     fig = plt.figure(figsize=(10, 6))
     plt.errorbar(range(len(star_light_curve)), star_light_curve,
                  yerr=[star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
-                     i}' in star else 0 for i in range(len(self.flux_columnames))],
+                     i}' in star else 0 for i in range(len(flux_columnames))],
                  fmt='o', label='Star Light Curve')
     plt.errorbar(range(len(reference_light_curve)), reference_light_curve,
                  fmt='o', label='Reference Light Curve')
