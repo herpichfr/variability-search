@@ -266,6 +266,12 @@ class PrepareCatalogues:
                 i}'][idx[matched]] = catalogue['FLUX_ERR'].values[matched]
 
         self.unified_catalogue = pd.DataFrame(self.unified_catalogue)
+        # Remove all objects with less than ten observasions for which we have magnitude data
+        mag_columns = [
+            col for col in self.unified_catalogue.columns if col.startswith('MAG_')]
+        mag_data_counts = self.unified_catalogue[mag_columns].notna().sum(
+            axis=1)
+        self.unified_catalogue = self.unified_catalogue[mag_data_counts >= 10]
         self.logger.info("Data organization complete.")
 
         if self.save_outputs:
