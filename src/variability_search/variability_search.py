@@ -7,7 +7,6 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from multiprocessing import Pool
 
 
 def parse_arguments():
@@ -227,6 +226,10 @@ class VariabilitySearch:
 
         # Iterate over all stars in the unified catalogue to compute variability
         for index, star in median_stars_df.iterrows():
+            star_ra = star['RA']
+            star_dec = star['DEC']
+            star_median_mag = np.nanmedian(
+                star[[f'MAG_{i}' for i in range(len(self.flux_columnames))]].to_numpy())
             median_star_light_curve = star[self.flux_columnames].to_numpy()
             median_star_error_vector = np.array(
                 [star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{i}' in star else 0 for i in range(len(self.flux_columnames))])
@@ -260,14 +263,15 @@ class VariabilitySearch:
 
             plt.xlabel('Observation Index')
             plt.ylabel('Relative Flux')
-            plt.title(f'Variability Analysis for Star index {index}')
+            plt.title(f'Variability Analysis for Star index {index:05d} (RA: {
+                      star_ra:.5f}, DEC: {star_dec:.5f}) Mag: {star_median_mag:.1f}')
             plt.legend(loc='upper right')
             plt.grid()
             if self.save_plots:
                 output_plotsdir = os.path.join(self.outputdir, 'plots')
                 os.makedirs(output_plotsdir, exist_ok=True)
                 plot_path = os.path.join(
-                    output_plotsdir, f'star_{index}_variability.png')
+                    output_plotsdir, f'star_{index:05d}_{star_ra:.5f}_{star_dec:.5f}.png')
                 plt.savefig(plot_path)
                 self.logger.info(f"Saved variability plot for star index {
                                  index} to {plot_path}.")
