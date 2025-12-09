@@ -200,23 +200,29 @@ class VariabilitySearch:
         valid_obs_mask = unified_catalogue[self.flux_columnames].notna().sum(
             axis=1) >= 2
         unified_catalogue = unified_catalogue[valid_obs_mask]
+
+        # Dive comparison stars light curve by reference light curve
+        comparison_stars[self.flux_columnames] = comparison_stars[self.flux_columnames].div(
+            reference_light_curve, axis=1)
         # Compute the average light curve of the comparison stars
         comparison_light_curve = np.nanmedian(
             comparison_stars[self.flux_columnames].to_numpy(), axis=0)
+
+        # Divide all stars by the reference light curve
+        stars = unified_catalogue[self.flux_columnames].div(
+            reference_light_curve, axis=1)
+        # Divide all stars by the comparison light curve
+        stars = stars.div(comparison_light_curve, axis=1)
+        if self.debug:
+            self.logger.debug(
+                f"Comparison light curve: {comparison_light_curve}")
+            import pdb
+            pdb.set_trace()
         # Iterate over all stars in the unified catalogue to compute variability
         if self.np < 2:
             variability_results = pd.DataFrame(
                 columns=[f'REL_FLUX_{i}' for i in range(len(self.flux_columnames))] + ['STD_DEV'])
-            for index, star in unified_catalogue[:2].iterrows():
-                star_light_curve = star[self.flux_columnames].to_numpy()
-                # Subtract the reference light curve from the star's light curve
-                star_light_curve = star_light_curve / reference_light_curve
-                # Compute the differential light curve
-                differential_light_curve = star_light_curve - comparison_light_curve
-                # Compute variability metrics (e.g., standard deviation)
-                std_dev = np.nanstd(differential_light_curve)
-                variability_results.loc[index] = list(
-                    differential_light_curve) + [std_dev]
+            for index, star in stars[:20].iterrows():
                 if self.debug:
                     plt.show()
                     ask = input("Continue showing plots? (y/n): ")
@@ -225,7 +231,7 @@ class VariabilitySearch:
                         break
                 if self.save_plots:
                     plot_light_curve(
-                        star_light_curve,
+                        star.to_numpy(),
                         reference_light_curve,
                         comparison_light_curve,
                         self.flux_columnames,
@@ -243,7 +249,7 @@ class VariabilitySearch:
             args_list = [
                 (
                     index,
-                    star,
+                    stars,
                     reference_light_curve,
                     comparison_light_curve,
                     self.flux_columnames,
@@ -330,14 +336,21 @@ def plot_light_curve(
     output_path = os.path.join(outputdir, 'plots')
     os.makedirs(output_path, exist_ok=True)
     fig = plt.figure(figsize=(10, 6))
-    plt.errorbar(range(len(star_light_curve)), star_light_curve,
+    import pdb
+    pdb.set_trace()
+    plt.errorbar(range(len(star_light_curve)),
+                 star_light_curve / np.nanmedian(star_light_curve),
                  yerr=[star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
                      i}' in star else 0 for i in range(len(flux_columnames))],
-                 fmt='o', label='Star Light Curve')
-    plt.errorbar(range(len(reference_light_curve)), reference_light_curve,
-                 fmt='o', label='Reference Light Curve')
-    plt.errorbar(range(len(comparison_light_curve)), comparison_light_curve,
-                 fmt='o', label='Comparison Light Curve')
+                 c='r', fmt='o', label='Star Light Curve')
+    plt.errorbar(range(len(reference_light_curve)),
+                 reference_light_curve /
+                 np.nanmedian(reference_light_curve) + 1,
+                 c='b', fmt='o', label='Reference Light Curve')
+    plt.errorbar(range(len(comparison_light_curve)),
+                 comparison_light_curve /
+                 np.nanmedian(comparison_light_curve) + 0.5,
+                 c='g', fmt='o', label='Comparison Light Curve')
     plt.xlabel('Observation Index')
     plt.ylabel('Relative Flux')
     plt.title(f'Variability Analysis for Star index {index}')
