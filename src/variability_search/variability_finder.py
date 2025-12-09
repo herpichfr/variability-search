@@ -65,6 +65,12 @@ def parse_args():
         help="Number of processes to use for parallel processing (default: 1)",
     )
     parser.add_argument(
+        "--min_epocs",
+        type=int,
+        default=20,
+        help="Minimum number of epochs required for variability analysis (default: 20)",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         help="Path to output file",

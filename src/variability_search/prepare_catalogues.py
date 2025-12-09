@@ -102,6 +102,7 @@ class PrepareCatalogues:
         self.raunit = u.Unit(args.raunit)
         self.numproc = args.np
         self.save_outputs = args.save_output
+        self.min_obs = args.min_epocs if args.min_epocs > 10 else 10
         self.debug = args.debug
         self.logger = logger if logger else logging.getLogger(__name__)
         self.unified_catalogue = dict()
@@ -271,7 +272,7 @@ class PrepareCatalogues:
             col for col in self.unified_catalogue.columns if col.startswith('MAG_')]
         mag_data_counts = self.unified_catalogue[mag_columns].notna().sum(
             axis=1)
-        self.unified_catalogue = self.unified_catalogue[mag_data_counts >= 10]
+        self.unified_catalogue = self.unified_catalogue[mag_data_counts > self.min_obs]
         self.logger.info("Data organization complete.")
 
         if self.save_outputs:
