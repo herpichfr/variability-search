@@ -204,77 +204,87 @@ class VariabilitySearch:
         # Dive comparison stars light curve by reference light curve
         comparison_stars[self.flux_columnames] = comparison_stars[self.flux_columnames].div(
             reference_light_curve, axis=1)
-        # Compute the average light curve of the comparison stars
-        comparison_light_curve = np.nanmedian(
-            comparison_stars[self.flux_columnames].to_numpy(), axis=0)
-
         # Divide all stars by the reference light curve
         stars = unified_catalogue[self.flux_columnames].div(
             reference_light_curve, axis=1)
-        # Divide all stars by the comparison light curve
-        stars = stars.div(comparison_light_curve, axis=1)
+
+        stars_dfs = []
+        for comp_star in comparison_stars[self.flux_columnames].itertuples(index=False):
+            comp_star_series = pd.Series(comp_star, index=self.flux_columnames)
+            stars_div_comp = stars.div(comp_star_series, axis=1)
+            stars_dfs.append(stars_div_comp)
+
+        median_comparison_light_curve = np.nanmedian(
+            comparison_stars[self.flux_columnames].to_numpy(), axis=0)
+
+        # Compute the median of each star in stars_dfs
+        median_stars_lcs = np.nanmedian(
+            np.array([df[self.flux_columnames].to_numpy() for df in stars_dfs]), axis=0)
+        median_stars_df = pd.DataFrame(
+            unified_catalogue.copy())
+        for i, col in enumerate(self.flux_columnames):
+            median_stars_df[col] = median_stars_lcs[:, i]
+
+        # Iterate over all stars in the unified catalogue to compute variability
+        for index, star in median_stars_df.iterrows():
+            median_star_light_curve = star[self.flux_columnames].to_numpy()
+            median_star_error_vector = np.array(
+                [star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{i}' in star else 0 for i in range(len(self.flux_columnames))])
+            median_star_error_scaled = median_star_error_vector / \
+                np.nanmedian(median_star_error_vector)
+            plt.figure(figsize=(10, 6))
+            plt.errorbar(range(len(reference_light_curve)),
+                         reference_light_curve /
+                         np.nanmedian(reference_light_curve) + 1,
+                         c='r', fmt='s', label='Reference Light Curve')
+            plt.errorbar(range(len(median_comparison_light_curve)),
+                         median_comparison_light_curve /
+                         np.nanmedian(median_comparison_light_curve) + 0.5,
+                         c='g', fmt='*', label=f'N comparisons: {len(comparison_stars)}')
+            plt.errorbar(range(len(median_star_light_curve)),
+                         median_star_light_curve /
+                         np.nanmedian(median_star_light_curve),
+                         yerr=median_star_error_scaled,
+                         c='k', fmt='o', label='Star Light Curve')
+            for i, star_df in enumerate(stars_dfs):
+                comp_light_curve = comparison_stars[self.flux_columnames].iloc[i].to_numpy(
+                )
+                plt.errorbar(range(len(comp_light_curve)),
+                             comp_light_curve /
+                             np.nanmedian(comp_light_curve) + 0.5,
+                             c='g', fmt='*', alpha=0.3, zorder=-1)
+                star_light_curve = star_df.loc[index].to_numpy()
+                plt.errorbar(range(len(star_light_curve)),
+                             star_light_curve / np.nanmedian(star_light_curve),
+                             c='gray', fmt='o', alpha=0.3, zorder=-1)
+
+            plt.xlabel('Observation Index')
+            plt.ylabel('Relative Flux')
+            plt.title(f'Variability Analysis for Star index {index}')
+            plt.legend(loc='upper right')
+            plt.grid()
+            if self.save_plots:
+                output_plotsdir = os.path.join(self.outputdir, 'plots')
+                os.makedirs(output_plotsdir, exist_ok=True)
+                plot_path = os.path.join(
+                    output_plotsdir, f'star_{index}_variability.png')
+                plt.savefig(plot_path)
+                self.logger.info(f"Saved variability plot for star index {
+                                 index} to {plot_path}.")
+                plt.close()
+            else:
+                plt.show()
+
         if self.debug:
-            self.logger.debug(
-                f"Comparison light curve: {comparison_light_curve}")
             import pdb
             pdb.set_trace()
-        # Iterate over all stars in the unified catalogue to compute variability
-        if self.np < 2:
-            variability_results = pd.DataFrame(
-                columns=[f'REL_FLUX_{i}' for i in range(len(self.flux_columnames))] + ['STD_DEV'])
-            for index, star in stars[:20].iterrows():
-                if self.debug:
-                    plt.show()
-                    ask = input("Continue showing plots? (y/n): ")
-                    if ask.lower() != 'y':
-                        plt.close('all')
-                        break
-                if self.save_plots:
-                    plot_light_curve(
-                        star.to_numpy(),
-                        reference_light_curve,
-                        comparison_light_curve,
-                        self.flux_columnames,
-                        index,
-                        star,
-                        self.outputdir,
-                        logger=self.logger
-                    )
 
-            # Merge the two dataframes
-            final_results = pd.concat(
-                [unified_catalogue.reset_index(drop=True), variability_results.reset_index(drop=True)], axis=1)
-        else:
-            # Prepare arguments for parallel processing
-            args_list = [
-                (
-                    index,
-                    stars,
-                    reference_light_curve,
-                    comparison_light_curve,
-                    self.flux_columnames,
-                    self.outputdir,
-                    self.save_plots,
-                    self.logger
-                )
-                for index, star in unified_catalogue.iterrows()
-            ]
-            with Pool(processes=self.np) as pool:
-                results = pool.starmap(process_source, args_list)
-            variability_results = pd.concat(results, ignore_index=True)
-
-            # Merge the two dataframes
-            final_results = pd.concat(
-                [unified_catalogue.reset_index(drop=True), variability_results.reset_index(drop=True)], axis=1)
-
+        # Save median_stars_df to output file
         if self.save_output:
-            # Save the results to the output file
-            final_results.to_csv(self.output, index=False)
+            os.makedirs(self.outputdir, exist_ok=True)
+            median_stars_df.to_csv(self.output, index=False)
             self.logger.info(
                 f"Variability results saved to {self.output}.")
-        if self.debug:
-            import pdb
-            pdb.set_trace()
 
     def run(self):
         self.logger.info("Starting variability search process.")
@@ -283,86 +293,6 @@ class VariabilitySearch:
             stable_stars, median_light_curve)
         self.search_variability(median_light_curve, comparison_stars)
         self.logger.info("Variability search process completed.")
-
-
-def process_source(
-    index,
-    source,
-    ref_light_curve,
-    comp_light_curve,
-    flux_columnames,
-    outputdir,
-    save_plot=False,
-    logger=logging.getLogger(__name__)
-):
-    variability_results = pd.DataFrame(
-        columns=[f'REL_FLUX_{i}' for i in range(len(flux_columnames))] + ['STD_DEV'])
-
-    star_light_curve = source[flux_columnames].to_numpy()
-    # Subtract the reference light curve from the star's light curve
-    star_light_curve = star_light_curve / ref_light_curve
-    # Compute the differential light curve
-    differential_light_curve = star_light_curve - comp_light_curve
-    # Compute variability metrics (e.g., standard deviation)
-    std_dev = np.nanstd(differential_light_curve)
-    variability_results.loc[index] = list(
-        differential_light_curve) + [std_dev]
-
-    if save_plot:
-        plot_light_curve(
-            star_light_curve,
-            ref_light_curve,
-            comp_light_curve,
-            flux_columnames,
-            index,
-            source,
-            outputdir,
-            logger
-        )
-
-    return variability_results
-
-
-def plot_light_curve(
-    star_light_curve: np.ndarray,
-    reference_light_curve: np.ndarray,
-    comparison_light_curve: np.ndarray,
-    flux_columnames: list[str],
-    index: int,
-    star: pd.Series,
-    outputdir: str,
-    logger=logging.getLogger(__name__)
-):
-    output_path = os.path.join(outputdir, 'plots')
-    os.makedirs(output_path, exist_ok=True)
-    fig = plt.figure(figsize=(10, 6))
-    import pdb
-    pdb.set_trace()
-    plt.errorbar(range(len(star_light_curve)),
-                 star_light_curve / np.nanmedian(star_light_curve),
-                 yerr=[star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{
-                     i}' in star else 0 for i in range(len(flux_columnames))],
-                 c='r', fmt='o', label='Star Light Curve')
-    plt.errorbar(range(len(reference_light_curve)),
-                 reference_light_curve /
-                 np.nanmedian(reference_light_curve) + 1,
-                 c='b', fmt='o', label='Reference Light Curve')
-    plt.errorbar(range(len(comparison_light_curve)),
-                 comparison_light_curve /
-                 np.nanmedian(comparison_light_curve) + 0.5,
-                 c='g', fmt='o', label='Comparison Light Curve')
-    plt.xlabel('Observation Index')
-    plt.ylabel('Relative Flux')
-    plt.title(f'Variability Analysis for Star index {index}')
-    plt.legend()
-    plt.grid()
-    _run_number = f"{index:05d}"
-    plot_path = os.path.join(
-        outputdir, f'plots/variability_star_{_run_number}.png')
-    fig.savefig(plot_path)
-    logger.info(
-        f"Variability plot saved to {plot_path}.")
-    plt.close(fig)
 
 
 if __name__ == "__main__":
