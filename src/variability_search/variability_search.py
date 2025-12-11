@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 
+from astropy.coordinates import SkyCoord
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -85,7 +86,7 @@ class VariabilitySearch:
         self.debug = args.debug
         self.unified_catalogue = unified_catalogue
         self.ref_column_name = 'FLUX'
-        self.flux_column_names = list()
+        self.flux_columnames = []
 
     def define_reference_star(self):
         """
@@ -103,9 +104,9 @@ class VariabilitySearch:
         # Use mags to determine the limits in fluxes
         _min_mag = 4.0
         _max_mag = np.percentile(
-            self.unified_catalogue['MAG_0'][~np.isnan(self.unified_catalogue['MAG_0'])], 95)
-        mask = (self.unified_catalogue['MAG_0'] >= _min_mag) & (
-            self.unified_catalogue['MAG_0'] < _max_mag)
+            2.5 * np.log10(self.unified_catalogue['FLUX_0'])[~np.isnan(self.unified_catalogue['FLUX_0'])], 95)
+        mask = (2.5 * np.log10(self.unified_catalogue['FLUX_0']) >= _min_mag) & (
+            2.5 * np.log10(self.unified_catalogue['FLUX_0']) < _max_mag)
         _min_flux, _max_flux = self.unified_catalogue['FLUX_0'][mask].min(
         ), self.unified_catalogue['FLUX_0'][mask].max()
 
@@ -156,7 +157,7 @@ class VariabilitySearch:
     def select_comparison_stars(self,
                                 stable_stars: pd.DataFrame,
                                 reference_light_curve: np.ndarray,
-                                variability_threshold: float = 0.02  # TODO: Verify appropriate threshold
+                                variability_threshold: float = 0.05  # TODO: Verify appropriate threshold
                                 ):
         """
         Select comparison stars based on variability threshold.
@@ -200,9 +201,17 @@ class VariabilitySearch:
             axis=1) >= 2
         unified_catalogue = unified_catalogue[valid_obs_mask]
 
+        # If stars have less than one third of valid observations, remove them
+        min_valid_obs = len(self.flux_columnames) // 3
+        valid_obs_mask = unified_catalogue[self.flux_columnames].notna().sum(
+            axis=1) >= min_valid_obs
+        unified_catalogue = unified_catalogue[valid_obs_mask]
+        self.logger.info(f"Filtered unified catalogue to {len(unified_catalogue)
+                                                          } stars with at least {min_valid_obs} valid observations.")
         # Dive comparison stars light curve by reference light curve
         comparison_stars[self.flux_columnames] = comparison_stars[self.flux_columnames].div(
             reference_light_curve, axis=1)
+
         # Divide all stars by the reference light curve
         stars = unified_catalogue[self.flux_columnames].div(
             reference_light_curve, axis=1)
@@ -228,6 +237,15 @@ class VariabilitySearch:
         for index, star in median_stars_df.iterrows():
             star_ra = star['RA']
             star_dec = star['DEC']
+            # NOTE: delete the following lines to consider all stars
+            target_var_star_coords = SkyCoord(
+                ra='23 34 15.0857248317', dec='-42 03 41.047972591', unit=('hour', 'deg'))
+            star_coords = SkyCoord(
+                ra=star_ra, dec=star_dec, unit=(self.raunit, 'deg'))
+            separation = star_coords.separation(target_var_star_coords).arcsec
+            if separation > 5.0:
+                continue
+
             star_median_mag = np.nanmedian(
                 star[[f'MAG_{i}' for i in range(len(self.flux_columnames))]].to_numpy())
             median_star_light_curve = star[self.flux_columnames].to_numpy()
@@ -235,7 +253,8 @@ class VariabilitySearch:
                 [star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{i}' in star else 0 for i in range(len(self.flux_columnames))])
             median_star_error_scaled = median_star_error_vector / \
                 np.nanmedian(median_star_error_vector)
-            plt.figure(figsize=(10, 6))
+            fig = plt.figure(figsize=(10, 6))
+            # Create subplot of a thirds of the figure height for the light curve
             plt.errorbar(range(len(reference_light_curve)),
                          reference_light_curve /
                          np.nanmedian(reference_light_curve) + 1,
@@ -247,8 +266,7 @@ class VariabilitySearch:
             plt.errorbar(range(len(median_star_light_curve)),
                          median_star_light_curve /
                          np.nanmedian(median_star_light_curve),
-                         yerr=median_star_error_scaled,
-                         c='k', fmt='o', label='Star Light Curve')
+                         c='k', fmt='o', label=f'Star LC. Med ERR: {np.nanmedian(median_star_error_scaled):.3f}')
             for i, star_df in enumerate(stars_dfs):
                 comp_light_curve = comparison_stars[self.flux_columnames].iloc[i].to_numpy(
                 )
@@ -259,8 +277,9 @@ class VariabilitySearch:
                 star_light_curve = star_df.loc[index].to_numpy()
                 plt.errorbar(range(len(star_light_curve)),
                              star_light_curve / np.nanmedian(star_light_curve),
-                             c='gray', fmt='o', alpha=0.3, zorder=-1)
+                             c='gray', fmt='o', alpha=0.3, zorder=-2)
 
+            plt.ylim(0.5, 2.5)
             plt.xlabel('Observation Index')
             plt.ylabel('Relative Flux')
             plt.title(f'Variability Analysis for Star index {index:05d} (RA: {
@@ -278,6 +297,10 @@ class VariabilitySearch:
                 plt.close()
             else:
                 plt.show()
+                ask = input("Press Enter to continue, or 'q' to quit: ")
+                if ask.lower() == 'q':
+                    plt.close()
+                    break
 
         if self.debug:
             import pdb
