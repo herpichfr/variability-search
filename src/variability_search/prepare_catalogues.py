@@ -109,16 +109,23 @@ class PrepareCatalogues:
         self.reference_star = None
         self.coords = None
 
-    def load_catalogs(self):
+    def load_catalogues(self):
+        output_cat_name = os.path.join(
+            self.output_dir, "unified_catalogue.csv")
+        if os.path.exists(output_cat_name):
+            self.logger.info(
+                f"Unified catalogue already exists at {output_cat_name}. Loading it.")
+            return True
+
         self.logger.info("Loading catalogs from input directory.")
         extensions = ('.fits', '.fit', '.fts', '.asc',
                       '.txt', '.csv', '.dat', '.cat')
-        catalog_files = [f for f in os.listdir(
-            self.input_dir) if f.lower().endswith(extensions)]
+        catalogue_files = sorted([f for f in os.listdir(
+            self.input_dir) if f.lower().endswith(extensions)])
         catalogues = []
-        for file in catalog_files:
+        for file in catalogue_files:
             path = os.path.join(self.input_dir, file)
-            self.logger.info(f"Loading catalog: {file}")
+            self.logger.info(f"Loading catalogue: {file}")
             # Check if FITS or ASCII file
             file_has_lodaded = False
             try:
@@ -128,7 +135,7 @@ class PrepareCatalogues:
                     catalogues.append(catalogue)
                 file_has_lodaded = True
             except Exception as e:
-                self.logger.error(
+                self.logger.warning(
                     f"Failed to load {file} as FITS. Trying ASCII. Error: {e}")
                 try:
                     catalogue = ascii.read(path).to_pandas()
@@ -182,56 +189,92 @@ class PrepareCatalogues:
                     if variant in catalogue.columns:
                         catalogue.rename(
                             columns={variant: standard_name}, inplace=True)
-            required_columns = ['RA', 'DEC', 'MAG', 'MAG_ERR',
-                                'FLUX', 'FLUX_ERR']
+            required_columns = ['RA', 'DEC', 'FLUX', 'FLUX_ERR']
             missing_columns = [
                 col for col in required_columns if col not in catalogue.columns]
             if missing_columns:
-                self.logger.warning(
-                    f"Catalog {i} is missing columns: {missing_columns}. "
-                    f"Filling with NaN."
+                self.logger.error(
+                    f"Catalogue {i} is missing required columns: {
+                        missing_columns}. "
+                    f"Dropping this catalogue."
                 )
-                for col in missing_columns:
-                    catalogue[col] = np.nan
+                catalogues.pop(i)
+                continue
+            # if the catalogue has less than 100 FLUX entries that are not NaN, drop it
+            if catalogue['FLUX'].notna().sum() < 100:
+                self.logger.error(
+                    f"Catalogue {
+                        i} has less than 100 valid FLUX entries. Dropping this catalogue."
+                )
+                catalogues.pop(i)
+                continue
 
+        _sep_thresh = 2.0  # arcseconds
+        _class_star_thresh = 0.5
+        _fwhm_min = 0.1
+        _fwhm_max = 20.0
         # if CLASS_STAR and FWHM are present, filter out non-stellar objects
         if 'CLASS_STAR' in catalogues[0].columns:
-            mask = catalogues[0]['CLASS_STAR'] >= 0.8
+            mask = catalogues[0]['CLASS_STAR'] >= _class_star_thresh
         else:
             self.logger.info(
                 "CLASS_STAR column not found. Skipping star/galaxy separation.")
             mask = np.ones(len(catalogues[0]), dtype=bool)
         if 'FWHM' in catalogues[0].columns:
-            mask &= (catalogues[0]['FWHM'] > 0.0) & (
-                catalogues[0]['FWHM'] < 10.0)
+            mask &= (catalogues[0]['FWHM'] > _fwhm_min) & (
+                catalogues[0]['FWHM'] < _fwhm_max)
         else:
             self.logger.info(
                 "FWHM column not found. Skipping FWHM filtering.")
+        if 'FLAGS' in catalogues[0].columns:
+            mask &= (catalogues[0]['FLAGS'] < 4)
+        else:
+            self.logger.info(
+                "FLAGS column not found. Skipping FLAGS filtering.")
         catalogue = catalogues[0][mask]
 
         ref_coords = SkyCoord(
             ra=catalogues[0]['RA'].values * self.raunit,
             dec=catalogues[0]['DEC'].values * u.deg)
 
-        for catalogue in catalogues[1:]:
+        for i, catalogue in enumerate(catalogues[1:]):
             if 'CLASS_STAR' in catalogue.columns:
-                mask = catalogue['CLASS_STAR'] >= 0.8
+                mask = catalogue['CLASS_STAR'] >= _class_star_thresh
             else:
                 self.logger.info(
                     "CLASS_STAR column not found. Skipping star/galaxy separation.")
                 mask = np.ones(len(catalogue), dtype=bool)
             if 'FWHM' in catalogue.columns:
-                mask &= (catalogue['FWHM'] > 0.0) & (
-                    catalogue['FWHM'] < 10.0)
+                mask &= (catalogue['FWHM'] > _fwhm_min) & (
+                    catalogue['FWHM'] < _fwhm_max)
             else:
                 self.logger.info(
                     "FWHM column not found. Skipping FWHM filtering.")
+            if 'FLAGS' in catalogue.columns:
+                mask &= (catalogue['FLAGS'] < 4)
+            else:
+                self.logger.info(
+                    "FLAGS column not found. Skipping FLAGS filtering.")
             catalogue = catalogue[mask]
+            # If the catalogue has less than 100 FLUX entries that are not NaN, drop it
+            if catalogue['FLUX'].notna().sum() < 100:
+                self.logger.error(
+                    f"Catalogue {
+                        i+1} has less than 100 valid FLUX entries. Dropping this catalogue."
+                )
+                continue
             cat_coords = SkyCoord(
                 ra=catalogue['RA'].values * self.raunit,
                 dec=catalogue['DEC'].values * u.deg)
             idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
-            matched = d2d.arcsec < 1.0
+            matched = d2d.arcsec < _sep_thresh
+            # If the catalogue has less than 50 matched stars, skip it
+            if np.sum(matched) < 10:
+                self.logger.error(
+                    f"Catalogue {
+                        i+1} has less than 50 matched stars. Dropping this catalogue."
+                )
+                continue
             # Add unmatched coordinates to ref_coords
             unmatched_coords = cat_coords[~matched]
             ref_coords = SkyCoord(
@@ -256,7 +299,7 @@ class PrepareCatalogues:
                 ra=catalogue['RA'].values * self.raunit,
                 dec=catalogue['DEC'].values * u.deg)
             idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
-            matched = d2d.arcsec < 1.0
+            matched = d2d.arcsec < _sep_thresh
             self.unified_catalogue[f'MAG_{i}'][idx[matched]
                                                ] = catalogue['MAG'].values[matched]
             self.unified_catalogue[f'MAG_ERR_{
@@ -283,7 +326,7 @@ class PrepareCatalogues:
 
     def run(self):
         self.logger.info("Starting variability search process.")
-        catalogues = self.load_catalogs()
+        catalogues = self.load_catalogues()
         if not catalogues:
             self.logger.critical("No catalogs loaded. Exiting.")
             return
