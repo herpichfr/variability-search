@@ -101,14 +101,9 @@ class VariabilitySearch:
             self.unified_catalogue = pd.read_csv(os.path.join(
                 self.workdir, "unified_catalogue.csv"))
         # Identify candidate reference stars based on brightness criteria
-        # Use mags to determine the limits in fluxes
-        _min_mag = 4.0
-        _max_mag = np.percentile(
-            2.5 * np.log10(self.unified_catalogue['FLUX_0'])[~np.isnan(self.unified_catalogue['FLUX_0'])], 95)
-        mask = (2.5 * np.log10(self.unified_catalogue['FLUX_0']) >= _min_mag) & (
-            2.5 * np.log10(self.unified_catalogue['FLUX_0']) < _max_mag)
-        _min_flux, _max_flux = self.unified_catalogue['FLUX_0'][mask].min(
-        ), self.unified_catalogue['FLUX_0'][mask].max()
+        _ref_flux = self.unified_catalogue[f'{self.ref_column_name}_0']
+        _min_flux = np.percentile(_ref_flux[~np.isnan(_ref_flux)], 5)
+        _max_flux = np.percentile(_ref_flux[~np.isnan(_ref_flux)], 99)
 
         self.flux_columnames = [
             col for col in self.unified_catalogue.columns if col.startswith(f'{self.ref_column_name}_') and 'ERR' not in col]
@@ -201,6 +196,18 @@ class VariabilitySearch:
             axis=1) >= 2
         unified_catalogue = unified_catalogue[valid_obs_mask]
 
+        # Load obs_info catalogue to get observation dates
+        obs_dates = pd.read_csv(os.path.join(
+            self.workdir, "observations_dates.csv"))
+        if len(obs_dates) == len(self.flux_columnames):
+            self.logger.info(
+                "Observation dates loaded successfully for variability analysis.")
+            x_labels = np.float64(obs_dates['OBS_DATE'])
+        else:
+            x_labels = range(len(self.flux_columnames))
+            self.logger.warning(
+                "Observation dates not found or do not match number of observations. Using index as x-axis labels.")
+
         # If stars have less than one third of valid observations, remove them
         min_valid_obs = len(self.flux_columnames) // 3
         valid_obs_mask = unified_catalogue[self.flux_columnames].notna().sum(
@@ -237,55 +244,87 @@ class VariabilitySearch:
         for index, star in median_stars_df.iterrows():
             star_ra = star['RA']
             star_dec = star['DEC']
-            # NOTE: delete the following lines to consider all stars
-            target_var_star_coords = SkyCoord(
-                ra='23 34 15.0857248317', dec='-42 03 41.047972591', unit=('hour', 'deg'))
-            star_coords = SkyCoord(
-                ra=star_ra, dec=star_dec, unit=(self.raunit, 'deg'))
-            separation = star_coords.separation(target_var_star_coords).arcsec
-            if separation > 5.0:
-                continue
+            # # NOTE: delete the following lines to consider all stars
+            # target_var_star_coords = SkyCoord(
+            #     ra='23 34 15.0857248317', dec='-42 03 41.047972591', unit=('hour', 'deg'))
+            # star_coords = SkyCoord(
+            #     ra=star_ra, dec=star_dec, unit=(self.raunit, 'deg'))
+            # separation = star_coords.separation(target_var_star_coords).arcsec
+            # if separation > 5.0:
+            #     continue
 
             star_median_mag = np.nanmedian(
                 star[[f'MAG_{i}' for i in range(len(self.flux_columnames))]].to_numpy())
             median_star_light_curve = star[self.flux_columnames].to_numpy()
-            median_star_error_vector = np.array(
-                [star[f'FLUX_ERR_{i}'] if f'FLUX_ERR_{i}' in star else 0 for i in range(len(self.flux_columnames))])
-            median_star_error_scaled = median_star_error_vector / \
-                np.nanmedian(median_star_error_vector)
-            fig = plt.figure(figsize=(10, 6))
+            scaled_median_star_light_curve = median_star_light_curve / \
+                np.nanmedian(median_star_light_curve)
+            # Compute a floating median of the median star light curve with a window of 5
+            window_size = 50 if len(self.flux_columnames) >= 50 else max(
+                5, len(self.flux_columnames) // 10)
+            floating_median = pd.Series(median_star_light_curve).rolling(
+                window=window_size, center=True, min_periods=1).median().to_numpy()
+
             # Create subplot of a thirds of the figure height for the light curve
-            plt.errorbar(range(len(reference_light_curve)),
-                         reference_light_curve /
-                         np.nanmedian(reference_light_curve) + 1,
-                         c='r', fmt='s', label='Reference Light Curve')
-            plt.errorbar(range(len(median_comparison_light_curve)),
-                         median_comparison_light_curve /
-                         np.nanmedian(median_comparison_light_curve) + 0.5,
-                         c='g', fmt='*', label=f'N comparisons: {len(comparison_stars)}')
-            plt.errorbar(range(len(median_star_light_curve)),
-                         median_star_light_curve /
-                         np.nanmedian(median_star_light_curve),
-                         c='k', fmt='o', label=f'Star LC. Med ERR: {np.nanmedian(median_star_error_scaled):.3f}')
+            _, (a0, a1) = plt.subplots(2, 1, sharex=True, gridspec_kw={
+                'height_ratios': [3, 1]}, figsize=(10, 8))
+            a0.errorbar(x_labels,
+                        reference_light_curve /
+                        np.nanmedian(reference_light_curve) + 1,
+                        c='r', fmt='s', label='Reference Light Curve')
+            a0.errorbar(x_labels,
+                        median_comparison_light_curve /
+                        np.nanmedian(median_comparison_light_curve) + 0.5,
+                        c='g', fmt='*', label=f'N comparisons: {len(comparison_stars)}')
+            _star_std = np.std(scaled_median_star_light_curve[~np.isnan(
+                scaled_median_star_light_curve)])
+            a0.errorbar(x_labels,
+                        scaled_median_star_light_curve,
+                        c='k', fmt='o', label=f'Star LC. STD: {_star_std:.3f}')
+            a1.errorbar(x_labels,
+                        scaled_median_star_light_curve,
+                        c='k', fmt='o')
             for i, star_df in enumerate(stars_dfs):
                 comp_light_curve = comparison_stars[self.flux_columnames].iloc[i].to_numpy(
                 )
-                plt.errorbar(range(len(comp_light_curve)),
-                             comp_light_curve /
-                             np.nanmedian(comp_light_curve) + 0.5,
-                             c='g', fmt='*', alpha=0.3, zorder=-1)
+                a0.errorbar(x_labels,
+                            comp_light_curve /
+                            np.nanmedian(comp_light_curve) + 0.5,
+                            c='g', fmt='*', alpha=0.3, zorder=-1)
                 star_light_curve = star_df.loc[index].to_numpy()
-                plt.errorbar(range(len(star_light_curve)),
-                             star_light_curve / np.nanmedian(star_light_curve),
-                             c='gray', fmt='o', alpha=0.3, zorder=-2)
+                a0.errorbar(x_labels,
+                            star_light_curve / np.nanmedian(star_light_curve),
+                            c='gray', fmt='o', alpha=0.3, zorder=-2)
+                a1.errorbar(x_labels,
+                            star_light_curve / np.nanmedian(star_light_curve),
+                            c='gray', fmt='o', alpha=0.3, zorder=-2)
+            # Plot the floating median over the star light curve
+            a1.plot(x_labels,
+                    floating_median / np.nanmedian(floating_median),
+                    c='orange', ls='-', lw=2,
+                    label='Floating Median', zorder=3)
 
-            plt.ylim(0.5, 2.5)
-            plt.xlabel('Observation Index')
-            plt.ylabel('Relative Flux')
-            plt.title(f'Variability Analysis for Star index {index:05d} (RA: {
-                      star_ra:.5f}, DEC: {star_dec:.5f}) Mag: {star_median_mag:.1f}')
-            plt.legend(loc='upper right')
-            plt.grid()
+            a0.set_ylim(0.75, 2.25)
+            a0.set_ylabel('Relative Flux')
+            # Remove x labels from a0
+            a0.set_xticklabels([])
+            a0.set_title(f'Variability Analysis for Star index {index:05d} (RA: {
+                star_ra:.5f}, DEC: {star_dec:.5f}) Mag: {star_median_mag:.1f}')
+            a0.legend(loc='upper right')
+            a0.grid()
+
+            # Set y limits for a1 as the fifth and 95th percentiles of the star light curve
+            _min_ylim = np.percentile(
+                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 1)
+            _max_ylim = np.percentile(
+                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 99)
+            a1.set_ylim(_min_ylim, _max_ylim)
+            a1.set_xlabel('Observation Date' if len(obs_dates) ==
+                          len(self.flux_columnames) else 'Observation Index')
+            a1.set_ylabel('Relative Flux')
+            a1.grid()
+
+            # Remove spaces between subplots
+            plt.subplots_adjust(hspace=0.01)
             if self.save_plots:
                 output_plotsdir = os.path.join(self.outputdir, 'plots')
                 os.makedirs(output_plotsdir, exist_ok=True)
