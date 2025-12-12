@@ -9,6 +9,7 @@ import pandas as pd
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import ascii, fits
+from astropy.time import Time
 
 
 def parse_args():
@@ -108,6 +109,7 @@ class PrepareCatalogues:
         self.unified_catalogue = dict()
         self.reference_star = None
         self.coords = None
+        self.obs_dates = []
 
     def load_catalogues(self):
         output_cat_name = os.path.join(
@@ -122,6 +124,14 @@ class PrepareCatalogues:
                       '.txt', '.csv', '.dat', '.cat')
         catalogue_files = sorted([f for f in os.listdir(
             self.input_dir) if f.lower().endswith(extensions)])
+        if not catalogue_files:
+            self.logger.critical(
+                f"No catalogue files found in {self.input_dir}. Exiting.")
+            return None
+        # Get catalogue dates from filenames if possible
+        self.obs_dates = [n.split('_')[0] for n in catalogue_files]
+        # TODO: Implement date extraction from file headers when available
+
         catalogues = []
         for file in catalogue_files:
             path = os.path.join(self.input_dir, file)
@@ -207,6 +217,7 @@ class PrepareCatalogues:
                         i} has less than 100 valid FLUX entries. Dropping this catalogue."
                 )
                 catalogues.pop(i)
+                self.obs_dates.pop(i)
                 continue
 
         _sep_thresh = 2.0  # arcseconds
@@ -262,6 +273,7 @@ class PrepareCatalogues:
                     f"Catalogue {
                         i+1} has less than 100 valid FLUX entries. Dropping this catalogue."
                 )
+                self.obs_dates.pop(i + 1)
                 continue
             cat_coords = SkyCoord(
                 ra=catalogue['RA'].values * self.raunit,
@@ -269,11 +281,12 @@ class PrepareCatalogues:
             idx, d2d, _ = cat_coords.match_to_catalog_sky(ref_coords)
             matched = d2d.arcsec < _sep_thresh
             # If the catalogue has less than 50 matched stars, skip it
-            if np.sum(matched) < 10:
+            if np.sum(matched) < self.min_obs:
                 self.logger.error(
                     f"Catalogue {
                         i+1} has less than 50 matched stars. Dropping this catalogue."
                 )
+                self.obs_dates.pop(i + 1)
                 continue
             # Add unmatched coordinates to ref_coords
             unmatched_coords = cat_coords[~matched]
@@ -309,17 +322,25 @@ class PrepareCatalogues:
             self.unified_catalogue[f'FLUX_ERR_{
                 i}'][idx[matched]] = catalogue['FLUX_ERR'].values[matched]
 
+        if len(self.obs_dates) != len(catalogues):
+            self.logger.critical(
+                "Number of observation dates does not match number of catalogues. Exiting."
+            )
+            return
         self.unified_catalogue = pd.DataFrame(self.unified_catalogue)
-        # Remove all objects with less than ten observasions for which we have magnitude data
-        mag_columns = [
-            col for col in self.unified_catalogue.columns if col.startswith('MAG_')]
-        mag_data_counts = self.unified_catalogue[mag_columns].notna().sum(
-            axis=1)
-        self.unified_catalogue = self.unified_catalogue[mag_data_counts > self.min_obs]
         self.logger.info("Data organization complete.")
+        # Make a new df with the observation dates and the indexes of the unified catalogue
+        self.obs_dates = [Time(f'{d.split('-')[0]}-{d.split('-')[1]}-{d.split('-')[2]}T{d.split('-')[3]}:{
+                               d.split('-')[4]}:{d.split('-')[5]}', format='isot', scale='utc').jd for d in self.obs_dates]
+        obs_info = pd.DataFrame({
+            'OBS_DATE': self.obs_dates,
+            'Catalogue_Index': list(range(len(catalogues)))
+        })
 
         if self.save_outputs:
             self.unified_catalogue.to_csv(output_cat_name, index=False)
+            obs_info.to_csv(
+                os.path.join(self.output_dir, "observations_dates.csv"), index=False)
             self.logger.info(
                 f"Unified catalogue saved to {output_cat_name}.")
         return self.unified_catalogue
