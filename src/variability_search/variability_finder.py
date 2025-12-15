@@ -1,11 +1,14 @@
 """Command-line interface for variability-search."""
 
+import os
 import argparse
 import logging
 
 from src.variability_search import __version__
 from src.variability_search.prepare_catalogues import PrepareCatalogues
 from src.variability_search.variability_search import VariabilitySearch
+
+from src.variability_search.variability_analyser import VariabilityAnalyser
 
 
 def logger(logfile=None, loglevel=logging.INFO):
@@ -54,6 +57,11 @@ def parse_args():
         help="Path to output directory. Default is 'output'.",
     )
     parser.add_argument(
+        "--input_catalogue",
+        default="variability_results.csv",
+        help="Path to input variability results file (CSV, ASCII, or FITS)",
+    )
+    parser.add_argument(
         "--raunit",
         default="deg",
         help="Unit for Right Ascension (default: deg)",
@@ -86,6 +94,11 @@ def parse_args():
         help="Save diagnostic plots",
     )
     parser.add_argument(
+        "--compute_fourier",
+        action="store_true",
+        help="Compute Fourier analysis",
+    )
+    parser.add_argument(
         "-l",
         "--logfile",
         help="Path to log file",
@@ -112,17 +125,31 @@ def main():
     args = parse_args()
     log = logger(logfile=args.logfile,
                  loglevel=getattr(logging, args.loglevel))
+    workdir = args.workdir if args.workdir else args.inputdir
 
-    # Step 1: Run prepare_catalogues.py
-    log.info("Step 1: Preparing catalogues...")
-    preparer = PrepareCatalogues(args, logger=log)
-    unified_catalogue = preparer.run()
+    if args.compute_fourier:
+        if not os.path.join(workdir, "variability_results.csv"):
+            # Step 1: Run prepare_catalogues.py
+            log.info("Step 1: Preparing catalogues...")
+            preparer = PrepareCatalogues(args, logger=log)
+            unified_catalogue = preparer.run()
 
-    # Step 2: Run variability_search.py
-    log.info("Step 2: Searching for variability...")
-    variability_searcher = VariabilitySearch(
-        args, unified_catalogue=unified_catalogue, logger=log)
-    variability_searcher.run()
+            # Step 2: Run variability_search.py
+            log.info("Step 2: Searching for variability...")
+            variability_searcher = VariabilitySearch(
+                args, unified_catalogue=unified_catalogue, logger=log)
+            variability_searcher.run()
+
+            # Step 3: Run variability_analyser.py
+            log.info("Step 3: Analysing variability...")
+            variability_analyser = VariabilityAnalyser(
+                args, logger=log)
+            variability_analyser.run()
+        else:
+            log.info("Starting with step 3: Analysing variability...")
+            variability_analyser = VariabilityAnalyser(
+                args, logger=log)
+            variability_analyser.run()
 
 
 if __name__ == "__main__":
