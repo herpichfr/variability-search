@@ -5,9 +5,13 @@ import logging
 import os
 
 from astropy.coordinates import SkyCoord
+from astropy import units as u
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+from astropy.timeseries import LombScargle
+from scipy.signal import find_peaks
 
 
 def parse_arguments():
@@ -87,6 +91,7 @@ class VariabilitySearch:
         self.unified_catalogue = unified_catalogue
         self.ref_column_name = 'FLUX'
         self.flux_columnames = []
+        self.istest = args.istest
 
     def define_reference_star(self):
         """
@@ -177,6 +182,47 @@ class VariabilitySearch:
 
         return comparison_stars
 
+    def calculate_lombscargle(self, star_light_curve, star_ra, star_dec, obs_dates):
+        frequency = np.linspace(
+            1.16e-6, 0.0056, len(self.flux_columnames)) * u.Hz
+        times = (np.float64(obs_dates['OBS_DATE']) -
+                 np.min(np.float64(obs_dates['OBS_DATE']))) * u.day
+        # star_light_curve = star[self.flux_columnames].to_numpy()
+        nan_mask = np.isnan(star_light_curve)
+        star_light_curve = np.ma.masked_array(
+            star_light_curve, mask=nan_mask)
+        # star_std = np.nanstd(star_light_curve, axis=1)
+        ls_model = LombScargle(
+            times[~nan_mask],
+            star_light_curve.data[~nan_mask],
+            star_light_curve.data[~nan_mask].size * [0.07],
+        )
+        power_spectrum = ls_model.power(frequency)
+        peaks = find_peaks(power_spectrum, height=0.1)
+        if peaks[0].size == 0:
+            self.logger.warning(
+                f"No peaks found for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
+            t_fit, y_fit, best_period = None, None, None
+        else:
+            self.logger.info(
+                f"Found {peaks[0].size} peaks for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
+            best_peak = peaks[0][np.argmax(peaks[1]['peak_heights'])]
+            best_frequency = frequency[best_peak]
+            best_period = 1.0 / best_frequency.value * u.day
+            t_fit = np.linspace(
+                np.min(times), np.max(times), 1000)
+            # phase_fit = t_fit / best_period
+            try:
+                y_fit = ls_model.model(t_fit, frequency[best_peak])
+            except ValueError:
+                self.logger.warning(
+                    f"Failed to fit LombScargle model for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
+                t_fit, y_fit, best_period = None, None, None
+                import pdb
+                pdb.set_trace()
+
+        return t_fit, y_fit, best_period
+
     def search_variability(self,
                            reference_light_curve: np.ndarray,
                            comparison_stars: pd.DataFrame
@@ -244,14 +290,28 @@ class VariabilitySearch:
         for index, star in median_stars_df.iterrows():
             star_ra = star['RA']
             star_dec = star['DEC']
-            # # NOTE: delete the following lines to consider all stars
+            output_plotsdir = os.path.join(self.outputdir, 'plots')
+            os.makedirs(output_plotsdir, exist_ok=True)
+            plot_path = os.path.join(
+                output_plotsdir, f'star_{index:05d}_{star_ra:.5f}_{star_dec:.5f}.png')
+            if os.path.exists(plot_path) and self.save_plots:
+                self.logger.info(
+                    f"Plot for star index {index} already exists. Skipping."
+                )
+                continue
+            # NOTE: delete the following lines to consider all stars
             # target_var_star_coords = SkyCoord(
-            #     ra='23 34 15.0857248317', dec='-42 03 41.047972591', unit=('hour', 'deg'))
-            # star_coords = SkyCoord(
-            #     ra=star_ra, dec=star_dec, unit=(self.raunit, 'deg'))
-            # separation = star_coords.separation(target_var_star_coords).arcsec
-            # if separation > 5.0:
-            #     continue
+            #     ra='23 34 15.0857248317', dec='-42 03 41.047972591', unit=('hour', 'deg')) # WASP 4b
+            if self.istest:
+                target_var_star_coords = SkyCoord(
+                    # WASP 145A
+                    ra='21 29 00.6895374360', dec='-58 50 10.299523848', unit=('hour', 'deg'))
+                star_coords = SkyCoord(
+                    ra=star_ra, dec=star_dec, unit=(self.raunit, 'deg'))
+                separation = star_coords.separation(
+                    target_var_star_coords).arcsec
+                if separation > 5.0:
+                    continue
 
             star_median_mag = np.nanmedian(
                 star[[f'MAG_{i}' for i in range(len(self.flux_columnames))]].to_numpy())
@@ -298,10 +358,23 @@ class VariabilitySearch:
                             star_light_curve / np.nanmedian(star_light_curve),
                             c='gray', fmt='o', alpha=0.3, zorder=-2)
             # Plot the floating median over the star light curve
-            a1.plot(x_labels,
-                    floating_median / np.nanmedian(floating_median),
+            _floating_median_scaked = floating_median[~np.isnan(
+                scaled_median_star_light_curve)] / np.nanmedian(floating_median)
+            a1.plot(x_labels[~np.isnan(scaled_median_star_light_curve)],
+                    _floating_median_scaked,
                     c='orange', ls='-', lw=2,
                     label='Floating Median', zorder=3)
+            t_fit, y_fit, best_period = self.calculate_lombscargle(
+                _floating_median_scaked, star_ra, star_dec, obs_dates[~np.isnan(scaled_median_star_light_curve)])
+            if t_fit is not None and y_fit is not None:
+                t_fit = t_fit / u.day + \
+                    np.min(obs_dates['OBS_DATE'][~np.isnan(
+                        scaled_median_star_light_curve)])
+                amplitude = (np.nanmax(y_fit) - np.nanmin(y_fit)) / 2
+                a1.plot(t_fit, y_fit, lw=3, c='purple', ls='--',
+                        label=f'Period: {best_period / u.day /
+                                         3600:.2f} h Amp: {amplitude:.3f}',
+                        zorder=4)
 
             a0.set_ylim(0.75, 2.25)
             a0.set_ylabel('Relative Flux')
@@ -314,22 +387,21 @@ class VariabilitySearch:
 
             # Set y limits for a1 as the fifth and 95th percentiles of the star light curve
             _min_ylim = np.percentile(
-                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 1)
+                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 3)
             _max_ylim = np.percentile(
-                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 99)
+                scaled_median_star_light_curve[~np.isnan(scaled_median_star_light_curve)], 97)
             a1.set_ylim(_min_ylim, _max_ylim)
+            a1.set_ylabel('Relative Flux')
             a1.set_xlabel('Observation Date' if len(obs_dates) ==
                           len(self.flux_columnames) else 'Observation Index')
-            a1.set_ylabel('Relative Flux')
+            a1.set_xticklabels(a1.get_xticks())
+            a1.legend(loc='upper right')
             a1.grid()
 
             # Remove spaces between subplots
             plt.subplots_adjust(hspace=0.01)
             if self.save_plots:
-                output_plotsdir = os.path.join(self.outputdir, 'plots')
-                os.makedirs(output_plotsdir, exist_ok=True)
-                plot_path = os.path.join(
-                    output_plotsdir, f'star_{index:05d}_{star_ra:.5f}_{star_dec:.5f}.png')
+                print(f'Saving plot {index} of {len(median_stars_df)}')
                 plt.savefig(plot_path)
                 self.logger.info(f"Saved variability plot for star index {
                                  index} to {plot_path}.")
