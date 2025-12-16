@@ -198,7 +198,7 @@ class VariabilitySearch:
             star_light_curve.data[~nan_mask].size * [0.07],
         )
         power_spectrum = ls_model.power(frequency)
-        peaks = find_peaks(power_spectrum, height=0.1)
+        peaks = find_peaks(power_spectrum, height=0.4)
         if peaks[0].size == 0:
             self.logger.warning(
                 f"No peaks found for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
@@ -221,7 +221,7 @@ class VariabilitySearch:
                 import pdb
                 pdb.set_trace()
 
-        return t_fit, y_fit, best_period
+        return t_fit, y_fit, best_period, best_peak
 
     def search_variability(self,
                            reference_light_curve: np.ndarray,
@@ -286,7 +286,11 @@ class VariabilitySearch:
         for i, col in enumerate(self.flux_columnames):
             median_stars_df[col] = median_stars_lcs[:, i]
 
+        best_periods = np.zeros(len(median_stars_df))
+        amplitudes = np.zeros(len(median_stars_df))
+        best_peaks = np.zeros(len(median_stars_df))
         # Iterate over all stars in the unified catalogue to compute variability
+        j = 0
         for index, star in median_stars_df.iterrows():
             star_ra = star['RA']
             star_dec = star['DEC']
@@ -364,7 +368,7 @@ class VariabilitySearch:
                     _floating_median_scaked,
                     c='orange', ls='-', lw=2,
                     label='Floating Median', zorder=3)
-            t_fit, y_fit, best_period = self.calculate_lombscargle(
+            t_fit, y_fit, best_period, best_peak = self.calculate_lombscargle(
                 _floating_median_scaked, star_ra, star_dec, obs_dates[~np.isnan(scaled_median_star_light_curve)])
             if t_fit is not None and y_fit is not None:
                 t_fit = t_fit / u.day + \
@@ -373,8 +377,12 @@ class VariabilitySearch:
                 amplitude = (np.nanmax(y_fit) - np.nanmin(y_fit)) / 2
                 a1.plot(t_fit, y_fit, lw=3, c='purple', ls='--',
                         label=f'Period: {best_period / u.day /
-                                         3600:.2f} h Amp: {amplitude:.3f}',
+                                         3600:.2f} h Amp: {amplitude:.3f} Peak: {best_peak}',
                         zorder=4)
+                best_periods[j] = best_period / u.day
+                amplitudes[j] = amplitude
+                best_peaks[j] = best_peak
+            j += 1
 
             a0.set_ylim(0.75, 2.25)
             a0.set_ylabel('Relative Flux')
@@ -420,6 +428,9 @@ class VariabilitySearch:
         # Save median_stars_df to output file
         if self.save_output:
             os.makedirs(self.outputdir, exist_ok=True)
+            median_stars_df['BEST_PERIOD_DAYS'] = best_periods
+            median_stars_df['AMPLITUDE'] = amplitudes
+            median_stars_df['BEST_PEAK'] = best_peaks
             median_stars_df.to_csv(self.output, index=False)
             self.logger.info(
                 f"Variability results saved to {self.output}.")
