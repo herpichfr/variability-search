@@ -202,10 +202,11 @@ class VariabilitySearch:
         if peaks[0].size == 0:
             self.logger.warning(
                 f"No peaks found for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
-            t_fit, y_fit, best_period = None, None, None
+            t_fit, y_fit, best_period, best_peak_height = None, None, None, None
         else:
             self.logger.info(
                 f"Found {peaks[0].size} peaks for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
+            best_peak_height = np.max(peaks[1]['peak_heights'])
             best_peak = peaks[0][np.argmax(peaks[1]['peak_heights'])]
             best_frequency = frequency[best_peak]
             best_period = 1.0 / best_frequency.value * u.day
@@ -217,11 +218,11 @@ class VariabilitySearch:
             except ValueError:
                 self.logger.warning(
                     f"Failed to fit LombScargle model for star RA: {star_ra:.4f}, DEC: {star_dec:.4f}.")
-                t_fit, y_fit, best_period = None, None, None
+                t_fit, y_fit, best_period, best_peak_height = None, None, None, None
                 import pdb
                 pdb.set_trace()
 
-        return t_fit, y_fit, best_period, best_peak
+        return t_fit, y_fit, best_period, best_peak_height
 
     def search_variability(self,
                            reference_light_curve: np.ndarray,
@@ -375,9 +376,9 @@ class VariabilitySearch:
                     np.min(obs_dates['OBS_DATE'][~np.isnan(
                         scaled_median_star_light_curve)])
                 amplitude = (np.nanmax(y_fit) - np.nanmin(y_fit)) / 2
-                a1.plot(t_fit, y_fit, lw=3, c='purple', ls='--',
+                a1.plot(t_fit, y_fit, lw=3, c='m', ls='--',
                         label=f'Period: {best_period / u.day /
-                                         3600:.2f} h Amp: {amplitude:.3f} Peak: {best_peak}',
+                                         3600:.2f} h Amp: {amplitude:.3f} Peak: {best_peak:.2f}',
                         zorder=4)
                 best_periods[j] = best_period / u.day
                 amplitudes[j] = amplitude
