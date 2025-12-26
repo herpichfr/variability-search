@@ -298,7 +298,7 @@ class VariabilitySearch:
             output_plotsdir = os.path.join(self.outputdir, 'plots')
             os.makedirs(output_plotsdir, exist_ok=True)
             plot_path = os.path.join(
-                output_plotsdir, f'star_{index:05d}_{star_ra:.5f}_{star_dec:.5f}.png')
+                output_plotsdir, f'star_{star_ra:.5f}_{star_dec:.5f}_{index:05d}.png')
             if os.path.exists(plot_path) and self.save_plots:
                 self.logger.info(
                     f"Plot for star index {index} already exists. Skipping."
